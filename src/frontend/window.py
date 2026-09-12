@@ -23,7 +23,7 @@ class MainWindow(QtWidgets.QWidget):
             QtGui.QKeySequence(QtCore.Qt.Key_Escape),
             self,
         )
-        self.close_shortcut.activated.connect(self.close)
+        self.close_shortcut.activated.connect(self.hide)
 
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setContentsMargins(6, 6, 6, 6)
@@ -84,6 +84,17 @@ class MainWindow(QtWidgets.QWidget):
 
         self.set_applications(applications)
 
+        self.search_box.input.setFocus()
+
+    @QtCore.Slot()
+    def toggle_visibility(self):
+        if self.isVisible():
+            self.hide()
+            return
+
+        self.show()
+        self.raise_()
+        self.activateWindow()
         self.search_box.input.setFocus()
 
     def set_applications(self, applications):

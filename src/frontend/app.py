@@ -1,7 +1,8 @@
+import signal
 import sys
 from pathlib import Path
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 # Сохраняет запуск как `python frontend/app.py` и одновременно позволяет
 # backend импортировать `frontend.app` как обычный пакет.
@@ -14,6 +15,7 @@ from frontend.window import MainWindow
 
 def main(applications=None):
     app = QtWidgets.QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("luma")
     # На Wayland это значение становится app-id, по которому Niri применяет
     # правило `match app-id="^luma$"` из config.kdl.
@@ -27,7 +29,25 @@ def main(applications=None):
         applications = get_apps()
 
     window = MainWindow(applications=applications)
-    window.show()
+    if "--background" not in sys.argv:
+        window.show()
+
+    toggle_requested = False
+
+    def request_toggle(_signum, _frame):
+        nonlocal toggle_requested
+        toggle_requested = True
+
+    def process_toggle():
+        nonlocal toggle_requested
+        if toggle_requested:
+            toggle_requested = False
+            window.toggle_visibility()
+
+    signal.signal(signal.SIGUSR1, request_toggle)
+    toggle_timer = QtCore.QTimer()
+    toggle_timer.timeout.connect(process_toggle)
+    toggle_timer.start(25)
 
     return app.exec()
 
