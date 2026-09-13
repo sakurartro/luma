@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 from backend.apps.models import Application
 import subprocess
+from database.service import update_datetime 
+from backend.apps.application_search import apps_obj
 
 if TYPE_CHECKING:
     from frontend.window import MainWindow
@@ -23,6 +25,8 @@ class ButtonConfig:
 
 def button1_action(window: "MainWindow"):
     """Показывает переданный из backend список приложений."""
+    apps = apps_obj.get_apps()
+    window.set_applications(apps)
     window.show_applications()
 
 
@@ -45,6 +49,7 @@ def application_action(window: "MainWindow", application: Application):
     """Заглушка для клика по приложению из сетки Button 1."""
     # Доступные поля: application.name, application.path,
     # application.icon_path.
+    update_datetime(application.name)
     subprocess.run(['gio', 'launch', application.path])
     pass
 

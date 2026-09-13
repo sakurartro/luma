@@ -5,6 +5,7 @@ from frontend.buttons import BUTTONS, application_action
 from frontend.settings import INITIAL_WINDOW_SIZE, WINDOW_STYLESHEET
 from frontend.widgets import GlassIconButton, LiquidGlassFrame, SearchBox, add_shadow
 
+from backend.apps.application_search import ApplicationData
 
 class MainWindow(QtWidgets.QWidget):
     def __init__(self, applications=None):
@@ -28,11 +29,12 @@ class MainWindow(QtWidgets.QWidget):
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(0)
+        main_layout.setAlignment(QtCore.Qt.AlignTop)
 
-        glass_panel = LiquidGlassFrame(radius=22)
-        add_shadow(glass_panel)
+        self.glass_panel = LiquidGlassFrame(radius=22)
+        add_shadow(self.glass_panel)
 
-        panel_layout = QtWidgets.QVBoxLayout(glass_panel)
+        panel_layout = QtWidgets.QVBoxLayout(self.glass_panel)
         panel_layout.setContentsMargins(0, 0, 0, 0)
         panel_layout.setSpacing(0)
 
@@ -80,7 +82,7 @@ class MainWindow(QtWidgets.QWidget):
         )
         self.applications_panel.hide()
         panel_layout.addWidget(self.applications_panel)
-        main_layout.addWidget(glass_panel)
+        main_layout.addWidget(self.glass_panel)
 
         self.set_applications(applications)
 
@@ -91,6 +93,10 @@ class MainWindow(QtWidgets.QWidget):
         if self.isVisible():
             self.hide()
             return
+
+        apps_obj = ApplicationData()
+        apps = apps_obj.get_apps()
+        self.set_applications(apps)
 
         self.show()
         self.raise_()
@@ -103,6 +109,8 @@ class MainWindow(QtWidgets.QWidget):
         self.applications_panel.set_applications(applications)
         if self.applications_panel.isVisible():
             self._resize_for_applications()
+        elif not self.isVisible():
+            self._prepare_main_window()
 
     def show_applications(self):
         """Показывает по одной плитке для каждого элемента Applications.apps."""
@@ -110,10 +118,34 @@ class MainWindow(QtWidgets.QWidget):
         self.applications_panel.show()
         self._resize_for_applications()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        QtCore.QTimer.singleShot(50, self._finish_show)
+
+    def hideEvent(self, event):
+        self.reset_to_main_window()
+        super().hideEvent(event)
+
     def _resize_for_applications(self):
-        panel_height = self.applications_panel.preferred_height()
-        window_height = INITIAL_WINDOW_SIZE[1] + 8 + panel_height
+        window_height = self._expanded_window_height()
         self.setFixedSize(INITIAL_WINDOW_SIZE[0], window_height)
+        self.glass_panel.setFixedHeight(window_height - 12)
+
+    def _expanded_window_height(self):
+        panel_height = self.applications_panel.preferred_height()
+        return INITIAL_WINDOW_SIZE[1] + 8 + panel_height
+
+    def _prepare_main_window(self):
+        self.glass_panel.setFixedHeight(INITIAL_WINDOW_SIZE[1] - 12)
+        self.setFixedSize(INITIAL_WINDOW_SIZE[0], self._expanded_window_height())
+
+    def _finish_show(self):
+        if not self.isVisible():
+            return
+
+        self.center_on_screen()
+        if not self.applications_panel.isVisible():
+            self.setFixedSize(*INITIAL_WINDOW_SIZE)
 
     @QtCore.Slot()
     def center_on_screen(self):
@@ -124,3 +156,8 @@ class MainWindow(QtWidgets.QWidget):
         centered_geometry = self.frameGeometry()
         centered_geometry.moveCenter(screen.availableGeometry().center())
         self.move(centered_geometry.topLeft())
+
+    def reset_to_main_window(self):
+        self.applications_panel.hide()
+        self.divider.hide()
+        self._prepare_main_window()

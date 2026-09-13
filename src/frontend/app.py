@@ -24,9 +24,9 @@ def main(applications=None):
     # applications может быть экземпляром backend.apps.models.Applications.
     # При обычном запуске список получаем автоматически из desktop-файлов.
     if applications is None:
-        from backend.apps.application_search import get_apps
+        from backend.apps.application_search import apps_obj
 
-        applications = get_apps()
+        applications = apps_obj.get_apps()
 
     window = MainWindow(applications=applications)
     if "--background" not in sys.argv:

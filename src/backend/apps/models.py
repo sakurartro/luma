@@ -12,3 +12,7 @@ class Applications(BaseModel):
 class IconPathes(BaseModel):
     name: str
     path: str
+    
+class Badges(BaseModel):
+    name: str
+    apps: list[Application]
