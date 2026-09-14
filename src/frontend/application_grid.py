@@ -8,6 +8,7 @@ from frontend.settings import (
     APPLICATION_MAX_VISIBLE_ROWS,
     APPLICATION_TILE_SIZE,
 )
+from frontend.badges import BadgesBar
 from frontend.widgets import LiquidGlassFrame
 
 
@@ -78,12 +79,18 @@ class ApplicationsPanel(LiquidGlassFrame):
     """Сетка, которая принимает Applications или обычный список объектов."""
 
     application_selected = QtCore.Signal(object)
+    content_height_changed = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(radius=20, surface=False, parent=parent)
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(10, 10, 8, 10)
+        root.setSpacing(8)
+
+        self.badges_bar = BadgesBar()
+        self.badges_bar.badge_selected.connect(self._show_badge)
+        root.addWidget(self.badges_bar)
 
         self.scroll = QtWidgets.QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -108,12 +115,28 @@ class ApplicationsPanel(LiquidGlassFrame):
     def set_applications(self, applications):
         """Принимает backend.apps.models.Applications или обычный список."""
         items = getattr(applications, "apps", applications)
+        self.badges_bar.clear_selection()
         self.set_items(list(items or []))
+
+    def set_badges(self, badges):
+        """Создаёт плашки из ``{name: [Application, ...]}``."""
+        models = self.badges_bar.set_badges(badges)
+        self.setFixedHeight(self.preferred_height())
+        self.content_height_changed.emit()
+        return models
+
+    @QtCore.Slot(object)
+    def _show_badge(self, badge):
+        self.set_items(badge.apps)
+        self.content_height_changed.emit()
 
     def set_items(self, items):
         while self.grid.count():
             layout_item = self.grid.takeAt(0)
             if layout_item.widget() is not None:
+                # hide() убирает старую плитку сразу; deleteLater() освободит
+                # объект после возврата управления в цикл событий Qt.
+                layout_item.widget().hide()
                 layout_item.widget().deleteLater()
 
         for index, application in enumerate(items):
@@ -128,10 +151,16 @@ class ApplicationsPanel(LiquidGlassFrame):
         self.setFixedHeight(self.preferred_height())
 
     def preferred_height(self):
+        badges_height = 36 if not self.badges_bar.isHidden() else 0
         if self.item_count == 0:
-            return 76
+            return 76 + badges_height
 
         rows = math.ceil(self.item_count / APPLICATION_COLUMNS)
         visible_rows = min(rows, APPLICATION_MAX_VISIBLE_ROWS)
         tile_height = APPLICATION_TILE_SIZE[1]
-        return 20 + visible_rows * tile_height + (visible_rows - 1) * 8
+        return (
+            20
+            + badges_height
+            + visible_rows * tile_height
+            + (visible_rows - 1) * 8
+        )

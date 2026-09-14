@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
-from backend.apps.models import Application
+from backend.apps.models import Application, Applications
 import subprocess
 from database.service import update_datetime 
 from backend.apps.application_search import apps_obj
@@ -23,11 +23,47 @@ class ButtonConfig:
     size: tuple[int, int] = (42, 42)
 
 
+def configure_badges(applications) -> dict[str, list[Application]]:
+    """Настройка плашек Applications.
+
+    Функция получает актуальный список из backend и должна вернуть словарь,
+    где каждое значение состоит из настоящих объектов Application.
+    """
+    apps = list(getattr(applications, "apps", applications) or [])
+
+    # Настраивай плашки здесь. Пример:
+    # finance_apps = [
+    #     app for app in apps if app.name in {"Sber", "T-Bank"}
+    # ]
+    # return {"finance": finance_apps}
+    return {}
+
+
 def button1_action(window: "MainWindow"):
     """Показывает переданный из backend список приложений."""
     apps = apps_obj.get_apps()
     window.set_applications(apps)
     window.show_applications()
+
+
+def applications_input_action(
+    window: "MainWindow",
+    user_input: str,
+):
+    """Передаёт введённый текст backend и показывает найденные приложения.
+
+    ``backend`` должен принимать строку из поля ввода и возвращать объект
+    ``backend.apps.models.Applications``. Сам поиск остаётся на стороне backend.
+    """
+    applications = apps_obj.search_by_query(user_input)
+    if not isinstance(applications, Applications):
+        raise TypeError(
+            "Backend поиска приложений должен возвращать Applications"
+        )
+
+    window.set_applications(applications)
+    window.show_applications()
+    return applications
 
 
 def button2_action(window: "MainWindow"):

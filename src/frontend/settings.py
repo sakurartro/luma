@@ -58,6 +58,29 @@ WINDOW_STYLESHEET = """
         background: rgba(255, 255, 255, 38);
     }
 
+    QPushButton#badgeButton {
+        color: rgba(244, 244, 245, 205);
+        background: rgba(255, 255, 255, 10);
+        border: 1px solid rgba(255, 255, 255, 20);
+        border-radius: 9px;
+        padding: 0 11px;
+        font-size: 11px;
+        font-weight: 500;
+    }
+
+    QPushButton#badgeButton:hover {
+        color: #f4f4f5;
+        background: rgba(255, 255, 255, 20);
+        border-color: rgba(255, 255, 255, 28);
+    }
+
+    QPushButton#badgeButton:pressed,
+    QPushButton#badgeButton[active="true"] {
+        color: #ffffff;
+        background: rgba(125, 211, 252, 35);
+        border-color: rgba(165, 243, 252, 80);
+    }
+
     QToolButton#applicationTile {
         color: #ededee;
         background: rgba(255, 255, 255, 9);

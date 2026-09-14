@@ -1,15 +1,25 @@
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from frontend.application_grid import ApplicationsPanel
-from frontend.buttons import BUTTONS, application_action
+from frontend.buttons import (
+    BUTTONS,
+    application_action,
+    applications_input_action,
+    configure_badges,
+)
 from frontend.settings import INITIAL_WINDOW_SIZE, WINDOW_STYLESHEET
 from frontend.widgets import GlassIconButton, LiquidGlassFrame, SearchBox, add_shadow
 
 from backend.apps.application_search import ApplicationData
 
 class MainWindow(QtWidgets.QWidget):
-    def __init__(self, applications=None):
+    def __init__(
+        self,
+        applications=None,
+        badges=None,
+    ):
         super().__init__()
+        self._use_configured_badges = badges is None
         self.setWindowFlags(
             QtCore.Qt.FramelessWindowHint
             | QtCore.Qt.WindowStaysOnTopHint
@@ -45,6 +55,9 @@ class MainWindow(QtWidgets.QWidget):
         search_layout.setSpacing(12)
 
         self.search_box = SearchBox()
+        self.search_box.input.textChanged.connect(
+            self._handle_applications_input
+        )
         search_layout.addWidget(self.search_box, 1)
 
         buttons_layout = QtWidgets.QHBoxLayout()
@@ -80,13 +93,25 @@ class MainWindow(QtWidgets.QWidget):
         self.applications_panel.application_selected.connect(
             lambda application: application_action(self, application)
         )
+        self.applications_panel.content_height_changed.connect(
+            self._resize_visible_applications
+        )
         self.applications_panel.hide()
         panel_layout.addWidget(self.applications_panel)
         main_layout.addWidget(self.glass_panel)
 
         self.set_applications(applications)
+        if badges is not None:
+            self.set_badges(badges)
 
         self.search_box.input.setFocus()
+
+    @QtCore.Slot(str)
+    def _handle_applications_input(self, user_input: str):
+        applications_input_action(
+            self,
+            user_input,
+        )
 
     @QtCore.Slot()
     def toggle_visibility(self):
@@ -107,10 +132,17 @@ class MainWindow(QtWidgets.QWidget):
         """Сохраняет Applications и обновляет сетку, если она уже открыта."""
         self.applications = applications
         self.applications_panel.set_applications(applications)
+        if self._use_configured_badges:
+            self.set_badges(configure_badges(applications))
         if self.applications_panel.isVisible():
             self._resize_for_applications()
         elif not self.isVisible():
             self._prepare_main_window()
+
+    def set_badges(self, badges):
+        """Устанавливает плашки из словаря ``{name: applications}``."""
+        self.badges = self.applications_panel.set_badges(badges)
+        return self.badges
 
     def show_applications(self):
         """Показывает по одной плитке для каждого элемента Applications.apps."""
@@ -130,6 +162,11 @@ class MainWindow(QtWidgets.QWidget):
         window_height = self._expanded_window_height()
         self.setFixedSize(INITIAL_WINDOW_SIZE[0], window_height)
         self.glass_panel.setFixedHeight(window_height - 12)
+
+    @QtCore.Slot()
+    def _resize_visible_applications(self):
+        if self.applications_panel.isVisible():
+            self._resize_for_applications()
 
     def _expanded_window_height(self):
         panel_height = self.applications_panel.preferred_height()

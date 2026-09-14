@@ -2,7 +2,7 @@ import sqlite3
 from datetime import datetime
 
 
-def add_data(name: str, app_path: str, icon_path: str):
+def add_data(name: str, app_path: str, icon_path: str) -> None:
     now = datetime.now()
     now = now.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -12,6 +12,13 @@ def add_data(name: str, app_path: str, icon_path: str):
             INSERT OR IGNORE INTO applications (name, app_path, icon_path, last_used) VALUES (?, ?, ?, ?)
         """, (name, app_path, icon_path, now))
 
+def delete_data(filename: str) -> None:
+    with sqlite3.connect("/run/media/sakura/1a177757-dd80-4b2f-8b81-d3db963ca160/projects/luma/src/database/main.sqlite3") as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            DELETE FROM applications WHERE name = ?
+        """, (filename,))
+        conn.commit()
 
 def update_datetime(name: str):
     now = datetime.now()

@@ -4,6 +4,8 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
 
+from backend.apps.apps_tracker.tracker import start_watcher
+
 # Сохраняет запуск как `python frontend/app.py` и одновременно позволяет
 # backend импортировать `frontend.app` как обычный пакет.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -13,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from frontend.window import MainWindow
 
 
-def main(applications=None):
+def main(applications=None, badges=None):
     app = QtWidgets.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("luma")
@@ -21,14 +23,21 @@ def main(applications=None):
     # правило `match app-id="^luma$"` из config.kdl.
     app.setDesktopFileName("luma")
 
+    start_watcher()
+
     # applications может быть экземпляром backend.apps.models.Applications.
+    # По умолчанию плашки берутся из configure_badges в frontend/buttons.py;
+    # badges позволяет при необходимости передать их напрямую.
     # При обычном запуске список получаем автоматически из desktop-файлов.
     if applications is None:
         from backend.apps.application_search import apps_obj
 
         applications = apps_obj.get_apps()
 
-    window = MainWindow(applications=applications)
+    window = MainWindow(
+        applications=applications,
+        badges=badges,
+    )
     if "--background" not in sys.argv:
         window.show()
 
