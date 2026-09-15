@@ -3,20 +3,21 @@ from watchdog.observers import Observer
 from pathlib import Path
 from backend.apps.icons.icon_search import icons_obj
 from database.service import add_data, delete_data
+from backend.config_parser.async_config_parser import AsyncConfigParser
+import asyncio
 
 class MyWatcher(FileSystemEventHandler):
     def on_created(self, event):
         path = event.src_path
         if Path(path).suffix == ".desktop":
-            file_name = Path(path).name
+            desktop = asyncio.run(AsyncConfigParser.from_file(path))
             icon_path = icons_obj.get_icon(path)
-            add_data(file_name.split(".desktop")[0], path, icon_path)
+            asyncio.run(add_data(desktop.get_app_name(), desktop.get_categories(), path, icon_path, desktop.get_command()))
     def on_deleted(self, event):
         path = event.src_path
         if Path(path).suffix == ".desktop":
            
-            filename = Path(path).name
-            delete_data(filename.split(".desktop")[0])
+            asyncio.run(delete_data(path))
 
 def start_watcher():
     path = "/usr/share/applications"
@@ -34,4 +35,3 @@ if __name__ == "__main__":
     finally:
         observer.stop()
         observer.join()
-    

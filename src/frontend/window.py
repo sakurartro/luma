@@ -126,7 +126,7 @@ class MainWindow(QtWidgets.QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
-        self.search_box.input.setFocus()
+        self._focus_search()
 
     def set_applications(self, applications):
         """Сохраняет Applications и обновляет сетку, если она уже открыта."""
@@ -149,6 +149,7 @@ class MainWindow(QtWidgets.QWidget):
         self.divider.show()
         self.applications_panel.show()
         self._resize_for_applications()
+        self._focus_search()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -183,6 +184,12 @@ class MainWindow(QtWidgets.QWidget):
         self.center_on_screen()
         if not self.applications_panel.isVisible():
             self.setFixedSize(*INITIAL_WINDOW_SIZE)
+        self.activateWindow()
+        self._focus_search()
+
+    def _focus_search(self):
+        self.search_box.input.setFocus()
+        self.search_box.input.setCursorPosition(len(self.search_box.input.text()))
 
     @QtCore.Slot()
     def center_on_screen(self):

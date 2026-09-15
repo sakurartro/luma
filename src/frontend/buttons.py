@@ -4,13 +4,13 @@ from backend.apps.models import Application, Applications
 import subprocess
 from database.service import update_datetime 
 from backend.apps.application_search import apps_obj
+import asyncio
 
 if TYPE_CHECKING:
     from frontend.window import MainWindow
 
 
 ButtonAction = Callable[["MainWindow"], None]
-
 
 @dataclass(frozen=True)
 class ButtonConfig:
@@ -29,15 +29,7 @@ def configure_badges(applications) -> dict[str, list[Application]]:
     Функция получает актуальный список из backend и должна вернуть словарь,
     где каждое значение состоит из настоящих объектов Application.
     """
-    apps = list(getattr(applications, "apps", applications) or [])
-
-    # Настраивай плашки здесь. Пример:
-    # finance_apps = [
-    #     app for app in apps if app.name in {"Sber", "T-Bank"}
-    # ]
-    # return {"finance": finance_apps}
-    return {}
-
+    return apps_obj.filter_apps_by_categories()
 
 def button1_action(window: "MainWindow"):
     """Показывает переданный из backend список приложений."""
@@ -85,7 +77,7 @@ def application_action(window: "MainWindow", application: Application):
     """Заглушка для клика по приложению из сетки Button 1."""
     # Доступные поля: application.name, application.path,
     # application.icon_path.
-    update_datetime(application.name)
+    asyncio.run(update_datetime(application.name))
     subprocess.run(['gio', 'launch', application.path])
     pass
 

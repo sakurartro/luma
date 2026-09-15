@@ -37,7 +37,7 @@ class BadgeButton(QtWidgets.QPushButton):
         self.badge = badge
         self.setObjectName("badgeButton")
         self.setProperty("active", False)
-        self.setFixedHeight(28)
+        self.setFixedSize(108, 28)
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setToolTip(f"{badge.name}: {len(badge.apps)}")
         self.clicked.connect(lambda: self.selected.emit(self.badge))
@@ -48,7 +48,7 @@ class BadgeButton(QtWidgets.QPushButton):
         self.style().polish(self)
 
 
-class BadgesBar(QtWidgets.QWidget):
+class BadgesBar(QtWidgets.QScrollArea):
     """Горизонтальный ряд плашек, созданных из моделей ``Badges``."""
 
     badge_selected = QtCore.Signal(object)
@@ -56,14 +56,26 @@ class BadgesBar(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("badgesBar")
+        self.setFixedHeight(36)
+        self.setWidgetResizable(False)
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.setFrameShape(QtWidgets.QFrame.NoFrame)
 
-        self.row = QtWidgets.QHBoxLayout(self)
-        self.row.setContentsMargins(0, 0, 0, 0)
+        self.content = QtWidgets.QWidget()
+        self.row = QtWidgets.QHBoxLayout(self.content)
+        self.row.setContentsMargins(0, 4, 0, 4)
         self.row.setSpacing(6)
         self.row.setAlignment(QtCore.Qt.AlignLeft)
+        self.row.setSizeConstraint(QtWidgets.QLayout.SetFixedSize)
+        self.setWidget(self.content)
+        self.content.installEventFilter(self)
+        self.viewport().installEventFilter(self)
 
         self.badges: list[Badges] = []
         self.buttons: list[BadgeButton] = []
+        self._drag_source = None
+        self._dragged = False
         self.hide()
 
     def set_badges(
@@ -94,12 +106,45 @@ class BadgesBar(QtWidgets.QWidget):
         for badge in models:
             button = BadgeButton(badge)
             button.selected.connect(self._select_badge)
+            button.installEventFilter(self)
             self.row.addWidget(button)
             self.buttons.append(button)
 
-        self.row.addStretch(1)
+        self.content.adjustSize()
+        self.horizontalScrollBar().setValue(0)
         self.setVisible(bool(models))
         return models
+
+    def wheelEvent(self, event):
+        pixels = event.pixelDelta()
+        angles = event.angleDelta()
+        delta = pixels.x() or pixels.y() or angles.x() // 2 or angles.y() // 2
+        bar = self.horizontalScrollBar()
+        bar.setValue(bar.value() - delta)
+        event.accept()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QtCore.QEvent.MouseButtonPress and event.button() == QtCore.Qt.LeftButton:
+            self._drag_source = watched
+            self._drag_start_x = event.globalPosition().x()
+            self._drag_start_scroll = self.horizontalScrollBar().value()
+            self._dragged = False
+        elif event.type() == QtCore.QEvent.MouseMove and self._drag_source is watched and event.buttons() & QtCore.Qt.LeftButton:
+            distance = event.globalPosition().x() - self._drag_start_x
+            if abs(distance) >= 6:
+                self._dragged = True
+            if self._dragged:
+                self.horizontalScrollBar().setValue(self._drag_start_scroll - int(distance))
+                if isinstance(watched, BadgeButton):
+                    watched.setDown(False)
+                return True
+        elif event.type() == QtCore.QEvent.MouseButtonRelease and event.button() == QtCore.Qt.LeftButton and self._drag_source is watched:
+            self._drag_source = None
+            if self._dragged:
+                if isinstance(watched, BadgeButton):
+                    watched.setDown(False)
+                return True
+        return super().eventFilter(watched, event)
 
     @QtCore.Slot(object)
     def _select_badge(self, selected: Badges):

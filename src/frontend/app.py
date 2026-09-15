@@ -5,6 +5,11 @@ from pathlib import Path
 from PySide6 import QtCore, QtWidgets
 
 from backend.apps.apps_tracker.tracker import start_watcher
+from backend.apps.application_search import apps_obj
+
+from database.init import init_db
+
+import asyncio
 
 # Сохраняет запуск как `python frontend/app.py` и одновременно позволяет
 # backend импортировать `frontend.app` как обычный пакет.
@@ -16,6 +21,9 @@ from frontend.window import MainWindow
 
 
 def main(applications=None, badges=None):
+    asyncio.run(init_db())
+    if not apps_obj.get_apps().apps:
+        apps_obj.initial_scan()
     app = QtWidgets.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("luma")
@@ -30,8 +38,6 @@ def main(applications=None, badges=None):
     # badges позволяет при необходимости передать их напрямую.
     # При обычном запуске список получаем автоматически из desktop-файлов.
     if applications is None:
-        from backend.apps.application_search import apps_obj
-
         applications = apps_obj.get_apps()
 
     window = MainWindow(

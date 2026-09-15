@@ -4,6 +4,9 @@ class Application(BaseModel):
     name: str
     path: str
     icon_path: str | None = None
+    categories: str | None = None
+    command: str | None = None
+
 
 class Applications(BaseModel):
     apps: list[Application]
