@@ -20,7 +20,7 @@ class AsyncConfigParser:
         value = self.config["Desktop Entry"].get("Name", "")
         return value
 
-    def get_categories(self) -> str:
+    def get_categories(self) -> list[str]:
         value = self.config["Desktop Entry"].get("Categories", "")
         return value
     

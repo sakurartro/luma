@@ -2,6 +2,7 @@ import math
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from backend.apps.models import Application
 
 from frontend.settings import (
     APPLICATION_COLUMNS,
@@ -12,8 +13,8 @@ from frontend.badges import BadgesBar
 from frontend.widgets import LiquidGlassFrame
 
 
-def _application_name(application):
-    return str(getattr(application, "name", application.__class__.__name__))
+def _application_name(application: Application):
+    return application.name
 
 
 def _fallback_icon(name, size=40):
@@ -38,14 +39,8 @@ def _fallback_icon(name, size=40):
     return QtGui.QIcon(pixmap)
 
 
-def _application_icon(application, name):
-    icon_value = getattr(application, "icon", None)
-    if isinstance(icon_value, QtGui.QIcon) and not icon_value.isNull():
-        return icon_value
-    if isinstance(icon_value, QtGui.QPixmap) and not icon_value.isNull():
-        return QtGui.QIcon(icon_value)
-
-    icon_path = getattr(application, "icon_path", None)
+def _application_icon(application: Application, name: str):
+    icon_path = application.icon_path
     if icon_path and Path(icon_path).is_file():
         icon = QtGui.QIcon(str(icon_path))
         if not icon.isNull():
@@ -59,24 +54,32 @@ class ApplicationTile(QtWidgets.QToolButton):
 
     selected = QtCore.Signal(object)
 
-    def __init__(self, application, parent=None):
+    def __init__(self, application: Application, parent=None):
         super().__init__(parent)
-        name = _application_name(application)
-
-        self.application = application
         self.setObjectName("applicationTile")
         self.setFixedSize(*APPLICATION_TILE_SIZE)
         self.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
-        self.setIcon(_application_icon(application, name))
         self.setIconSize(QtCore.QSize(40, 40))
-        self.setText(name)
-        self.setToolTip(name)
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.clicked.connect(lambda: self.selected.emit(self.application))
+        self.application = application
+        self.update_application(application, force=True)
+
+    def update_application(self, application: Application, force: bool = False):
+        previous = self.application
+        self.application = application
+        if force or (previous.name, previous.icon_path) != (
+            application.name,
+            application.icon_path,
+        ):
+            name = _application_name(application)
+            self.setIcon(_application_icon(application, name))
+            self.setText(name)
+            self.setToolTip(name)
 
 
 class ApplicationsPanel(LiquidGlassFrame):
-    """Сетка, которая принимает Applications или обычный список объектов."""
+    """Сетка приложений из списка объектов Application."""
 
     application_selected = QtCore.Signal(object)
     content_height_changed = QtCore.Signal()
@@ -102,6 +105,7 @@ class ApplicationsPanel(LiquidGlassFrame):
         self.grid.setHorizontalSpacing(8)
         self.grid.setVerticalSpacing(8)
         self.grid.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        self._tiles: dict[str, ApplicationTile] = {}
         self.scroll.setWidget(self.content)
 
         self.empty_label = QtWidgets.QLabel("Нет приложений")
@@ -112,11 +116,10 @@ class ApplicationsPanel(LiquidGlassFrame):
         root.addWidget(self.empty_label)
         self.set_items([])
 
-    def set_applications(self, applications):
-        """Принимает backend.apps.models.Applications или обычный список."""
-        items = getattr(applications, "apps", applications)
+    def set_applications(self, applications: list[Application]):
+        """Принимает список объектов Application."""
         self.badges_bar.clear_selection()
-        self.set_items(list(items or []))
+        self.set_items(applications)
 
     def set_badges(self, badges):
         """Создаёт плашки из ``{name: [Application, ...]}``."""
@@ -130,20 +133,23 @@ class ApplicationsPanel(LiquidGlassFrame):
         self.set_items(badge.apps)
         self.content_height_changed.emit()
 
-    def set_items(self, items):
+    def set_items(self, items: list[Application]):
         while self.grid.count():
             layout_item = self.grid.takeAt(0)
             if layout_item.widget() is not None:
-                # hide() убирает старую плитку сразу; deleteLater() освободит
-                # объект после возврата управления в цикл событий Qt.
                 layout_item.widget().hide()
-                layout_item.widget().deleteLater()
 
         for index, application in enumerate(items):
-            tile = ApplicationTile(application)
-            tile.selected.connect(self.application_selected)
+            tile = self._tiles.get(application.app_path)
+            if tile is None:
+                tile = ApplicationTile(application)
+                tile.selected.connect(self.application_selected)
+                self._tiles[application.app_path] = tile
+            else:
+                tile.update_application(application)
             row, column = divmod(index, APPLICATION_COLUMNS)
             self.grid.addWidget(tile, row, column)
+            tile.show()
 
         self.item_count = len(items)
         self.scroll.setVisible(bool(items))

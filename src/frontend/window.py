@@ -1,4 +1,5 @@
 from PySide6 import QtCore, QtGui, QtWidgets
+from backend.apps.models import Application
 
 from frontend.application_grid import ApplicationsPanel
 from frontend.buttons import (
@@ -6,16 +7,17 @@ from frontend.buttons import (
     application_action,
     applications_input_action,
     configure_badges,
+    recent_apps,
 )
 from frontend.settings import INITIAL_WINDOW_SIZE, WINDOW_STYLESHEET
 from frontend.widgets import GlassIconButton, LiquidGlassFrame, SearchBox, add_shadow
 
-from backend.apps.application_search import ApplicationData
+from backend.apps.application_search import apps_obj
 
 class MainWindow(QtWidgets.QWidget):
     def __init__(
         self,
-        applications=None,
+        applications: list[Application] | None = None,
         badges=None,
     ):
         super().__init__()
@@ -55,6 +57,10 @@ class MainWindow(QtWidgets.QWidget):
         search_layout.setSpacing(12)
 
         self.search_box = SearchBox()
+        self._search_timer = QtCore.QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(120)
+        self._search_timer.timeout.connect(self._apply_search)
         self.search_box.input.textChanged.connect(
             self._handle_applications_input
         )
@@ -107,10 +113,14 @@ class MainWindow(QtWidgets.QWidget):
         self.search_box.input.setFocus()
 
     @QtCore.Slot(str)
-    def _handle_applications_input(self, user_input: str):
+    def _handle_applications_input(self, _user_input: str):
+        self._search_timer.start()
+
+    @QtCore.Slot()
+    def _apply_search(self):
         applications_input_action(
             self,
-            user_input,
+            self.search_box.input.text(),
         )
 
     @QtCore.Slot()
@@ -119,21 +129,25 @@ class MainWindow(QtWidgets.QWidget):
             self.hide()
             return
 
-        apps_obj = ApplicationData()
-        apps = apps_obj.get_apps()
-        self.set_applications(apps)
+        self._search_timer.stop()
+        apps_obj.refresh()
+        query = self.search_box.input.text()
+        if query.strip():
+            applications_input_action(self, query)
+        else:
+            self.set_applications(recent_apps(apps_obj._apps))
 
         self.show()
         self.raise_()
         self.activateWindow()
         self._focus_search()
 
-    def set_applications(self, applications):
-        """Сохраняет Applications и обновляет сетку, если она уже открыта."""
-        self.applications = applications
-        self.applications_panel.set_applications(applications)
+    def set_applications(self, applications: list[Application] | None):
+        """Сохраняет список приложений и обновляет сетку."""
+        self.applications = list(applications or [])
+        self.applications_panel.set_applications(self.applications)
         if self._use_configured_badges:
-            self.set_badges(configure_badges(applications))
+            self.set_badges(configure_badges(self.applications))
         if self.applications_panel.isVisible():
             self._resize_for_applications()
         elif not self.isVisible():
@@ -145,7 +159,7 @@ class MainWindow(QtWidgets.QWidget):
         return self.badges
 
     def show_applications(self):
-        """Показывает по одной плитке для каждого элемента Applications.apps."""
+        """Показывает по одной плитке для каждого приложения."""
         self.divider.show()
         self.applications_panel.show()
         self._resize_for_applications()
@@ -156,6 +170,7 @@ class MainWindow(QtWidgets.QWidget):
         QtCore.QTimer.singleShot(50, self._finish_show)
 
     def hideEvent(self, event):
+        self._search_timer.stop()
         self.reset_to_main_window()
         super().hideEvent(event)
 

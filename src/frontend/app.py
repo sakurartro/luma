@@ -1,29 +1,35 @@
+import asyncio
 import signal
 import sys
 from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
 
-from backend.apps.apps_tracker.tracker import start_watcher
-from backend.apps.application_search import apps_obj
-
-from database.init import init_db
-
-import asyncio
-
-# Сохраняет запуск как `python frontend/app.py` и одновременно позволяет
-# backend импортировать `frontend.app` как обычный пакет.
+# Поддерживает запуск как `python frontend/app.py`.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from frontend.window import MainWindow
+from backend.apps.models import Application
+from database.init import init_db
 
 
-def main(applications=None, badges=None):
+def main(applications: list[Application] | None = None, badges=None):
     asyncio.run(init_db())
-    if not apps_obj.get_apps().apps:
+    """
+    импорт только сейчас так как при импорте start_watcher 
+    мы создаем объект apps_obj который в __init__ обращается к БД 
+    которая до момента init_db() может быть не создана
+    """
+    from backend.apps.apps_tracker.tracker import start_watcher
+    from backend.apps.application_search import apps_obj
+    from frontend.buttons import recent_apps
+    from frontend.window import MainWindow
+
+    apps_obj.refresh()
+    if not apps_obj._apps:
         apps_obj.initial_scan()
+        apps_obj.refresh()
     app = QtWidgets.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("luma")
@@ -33,12 +39,9 @@ def main(applications=None, badges=None):
 
     start_watcher()
 
-    # applications может быть экземпляром backend.apps.models.Applications.
-    # По умолчанию плашки берутся из configure_badges в frontend/buttons.py;
-    # badges позволяет при необходимости передать их напрямую.
-    # При обычном запуске список получаем автоматически из desktop-файлов.
+    # Плашки по умолчанию строятся из того же списка приложений.
     if applications is None:
-        applications = apps_obj.get_apps()
+        applications = recent_apps(apps_obj._apps)
 
     window = MainWindow(
         applications=applications,

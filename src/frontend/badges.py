@@ -83,11 +83,13 @@ class BadgesBar(QtWidgets.QScrollArea):
         badges: Mapping[str, object] | Iterable[Badges] | None,
     ) -> list[Badges]:
         """Устанавливает плашки из словаря или готовых моделей ``Badges``."""
+        reusable_buttons: dict[str, list[BadgeButton]] = {}
+        for button in self.buttons:
+            reusable_buttons.setdefault(button.badge.name, []).append(button)
         while self.row.count():
             item = self.row.takeAt(0)
             if item.widget() is not None:
                 item.widget().hide()
-                item.widget().deleteLater()
 
         if badges is None:
             models = []
@@ -104,11 +106,24 @@ class BadgesBar(QtWidgets.QScrollArea):
         self.badges = models
         self.buttons = []
         for badge in models:
-            button = BadgeButton(badge)
-            button.selected.connect(self._select_badge)
-            button.installEventFilter(self)
+            matching_buttons = reusable_buttons.get(badge.name, [])
+            button = matching_buttons.pop() if matching_buttons else None
+            if button is None:
+                button = BadgeButton(badge)
+                button.selected.connect(self._select_badge)
+                button.installEventFilter(self)
+            else:
+                button.badge = badge
+                button.setToolTip(f"{badge.name}: {len(badge.apps)}")
+                if button.property("active"):
+                    button.set_active(False)
             self.row.addWidget(button)
+            button.show()
             self.buttons.append(button)
+
+        for buttons in reusable_buttons.values():
+            for button in buttons:
+                button.deleteLater()
 
         self.content.adjustSize()
         self.horizontalScrollBar().setValue(0)
