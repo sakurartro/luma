@@ -22,6 +22,7 @@ class MainWindow(QtWidgets.QWidget):
     ):
         super().__init__()
         self._use_configured_badges = badges is None
+        self.uses_layer_shell = False
         self.setWindowFlags(
             QtCore.Qt.FramelessWindowHint
             | QtCore.Qt.WindowStaysOnTopHint
@@ -138,7 +139,8 @@ class MainWindow(QtWidgets.QWidget):
             self.set_applications(recent_apps(apps_obj._apps))
 
         self.show()
-        self.raise_()
+        if not self.uses_layer_shell:
+            self.raise_()
         self.activateWindow()
         self._focus_search()
 
@@ -190,7 +192,7 @@ class MainWindow(QtWidgets.QWidget):
 
     def _prepare_main_window(self):
         self.glass_panel.setFixedHeight(INITIAL_WINDOW_SIZE[1] - 12)
-        self.setFixedSize(INITIAL_WINDOW_SIZE[0], self._expanded_window_height())
+        self.setFixedSize(*INITIAL_WINDOW_SIZE)
 
     def _finish_show(self):
         if not self.isVisible():
@@ -208,6 +210,8 @@ class MainWindow(QtWidgets.QWidget):
 
     @QtCore.Slot()
     def center_on_screen(self):
+        if self.uses_layer_shell:
+            return
         screen = self.screen() or QtWidgets.QApplication.primaryScreen()
         if screen is None:
             return

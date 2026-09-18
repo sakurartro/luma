@@ -1,9 +1,13 @@
 aiofiles==25.1.0
 aiosqlite==0.22.1
-pip==26.2.1
+numpy==2.5.3
+onnxruntime==1.30.0
+Pillow==12.3.0
 pydantic==2.13.5
 pyinstaller==6.22.2
 PySide6==6.11.2
 pyxdg==0.28
 RapidFuzz==3.14.6
+shiboken6==6.11.2
+tokenizers==0.23.2
 watchdog==6.0.0

@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from backend.apps.models import Application
 from database.init import init_db
+from frontend.window_backend import configure_layer_window, prepare_layer_shell
 
 
 def main(applications: list[Application] | None = None, badges=None):
@@ -30,6 +31,7 @@ def main(applications: list[Application] | None = None, badges=None):
     if not apps_obj._apps:
         apps_obj.initial_scan()
         apps_obj.refresh()
+    layer_shell = prepare_layer_shell()
     app = QtWidgets.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("luma")
@@ -47,6 +49,8 @@ def main(applications: list[Application] | None = None, badges=None):
         applications=applications,
         badges=badges,
     )
+    if layer_shell and app.platformName() == "wayland":
+        configure_layer_window(window)
     if "--background" not in sys.argv:
         window.show()
 
