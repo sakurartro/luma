@@ -31,19 +31,14 @@ class SigTest:
 
 
     def text_to_vec(self):
-        
-
         encodings = self.tokenizer.encode_batch(self.texts)
 
         input_ids = np.array(
             [encoding.ids for encoding in encodings],
             dtype=np.int64
         )
-
         output = self.sess.run([self.output_name], {self.input_name: input_ids})[0]
-
         output = output / np.linalg.norm(output, axis=-1, keepdims=True)
-
         return output
 
     def preprocess_image(self):

@@ -22,7 +22,7 @@ class AsyncConfigParser:
 
     def get_categories(self) -> list[str]:
         value = self.config["Desktop Entry"].get("Categories", "")
-        return value
+        return [category.strip() for category in value.split(";") if category.strip()]
     
     def get_command(self) -> str:
         value = self.config["Desktop Entry"].get("Exec", "")

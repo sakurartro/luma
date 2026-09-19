@@ -6,3 +6,6 @@ app.spec
 *.sqlite3
 *.onnx
 *.json
+.agents/
+.codex/
+:memory:.ses

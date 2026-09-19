@@ -1,11 +1,10 @@
 import os
 from backend.apps.icons.icon_search import icons_obj
-from backend.apps.models import Application, Applications, IconPathes
-from database.service import add_data, get_data, get_all_categories, get_apps_by_category, add_batch_of_data
+from backend.apps.models import Application, Applications
+from database.service import get_data, add_batch_of_data
 from rapidfuzz import fuzz
 from backend.config_parser.async_config_parser import AsyncConfigParser
 import asyncio
-from database.init import init_db
 from datetime import datetime
 import subprocess
 
@@ -15,22 +14,22 @@ class ApplicationData:
         self.refresh()
 
     @staticmethod
-    def _application_from_row(row: tuple) -> Application:
+    def _application_from_row(row: dict) -> Application:
         return Application(
-            name=row[1],
-            categories=[category for category in (row[2] or "").split(";") if category],
-            app_path=row[3],
-            icon_path=row[4],
-            command=row[5] or "",
-            last_used=datetime.fromisoformat(row[6]) if row[6] else None,
-            last_checked=datetime.fromisoformat(row[7]) if row[7] else None,
+            name=row["name"],
+            categories=row["categories"],
+            app_path=row["app_path"],
+            icon_path=row["icon_path"],
+            command=row["command"] or "",
+            last_used=datetime.fromisoformat(row["last_used"]) if row["last_used"] else None,
+            last_checked=datetime.fromisoformat(row["last_checked"]) if row["last_checked"] else None,
         )
 
     def initial_scan(self):
         asyncio.run(self._initial_scan())
 
     async def _initial_scan(self):
-        items: list[tuple] = []
+        items: list[dict] = []
         for root, _, files in os.walk("/usr/share/applications"):
             for file in files:
                 if file.endswith(".desktop"):
@@ -40,9 +39,13 @@ class ApplicationData:
                     command = desktop.get_command()
                     categories = desktop.get_categories()
                     name = desktop.get_app_name()
-                    now = datetime.now()
-                    now = now.strftime("%Y-%m-%d %H:%M:%S")
-                    items.append((name, categories, path, icon_path, command, now, now))
+                    items.append({
+                        "name": name,
+                        "categories": categories,
+                        "app_path": path,
+                        "icon_path": icon_path,
+                        "command": command,
+                    })
         if items:
             await add_batch_of_data(items)
 
@@ -67,13 +70,10 @@ class ApplicationData:
         return Applications(apps=apps)
 
     def filter_apps_by_categories(self) -> dict[str, list[Application]]:
-        categories = {
-            cat.strip() for (cats,) in asyncio.run(get_all_categories()) if cats for cat in cats.split(";") if cat
-        }
         result: dict[str, list[Application]] = {}
-        for category in categories:
-            data = asyncio.run(get_apps_by_category(category))
-            result[category] = [self._application_from_row(row) for row in data]
+        for application in self._apps:
+            for category in application.categories or []:
+                result.setdefault(category, []).append(application)
         return result
 
 
