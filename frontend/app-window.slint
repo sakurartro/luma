@@ -1,0 +1,210 @@
+import { ScrollView } from "std-widgets.slint";
+
+export struct AppItem {
+    name: string,
+    path: string,
+    command: string,
+    icon: image,
+}
+
+export component MainWindow inherits Window {
+    in property <[AppItem]> apps;
+    callback show_apps();
+    callback launch_app(command: string);
+    private property <bool> apps-open: false;
+
+    width: 760px;
+    height: 420px;
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 10px;
+
+        HorizontalLayout {
+            height: 60px;
+            spacing: 10px;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 60px;
+                border-radius: 30px;
+                background: #1C1E23;
+
+                HorizontalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    spacing: 12px;
+
+                    Image {
+                        source: @image-url("/home/sakura/Downloads/search.svg");
+                        colorize: #8B9CFF;
+                        width: 20px;
+                        height: 20px;
+                        y: (parent.height - self.height) / 2 - 1px;
+                    }
+
+                    TextInput {
+                        text: "";
+                        font-size: 20px;
+                        color: #F3F4F6;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 60px;
+                height: 60px;
+                border-radius: 30px;
+                background: root.apps-open ? #343A50 : #25282F;
+
+                Image {
+                    source: @image-url("/home/sakura/Downloads/layout-grid.svg");
+                    colorize: #B8BEC9;
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+
+                    clicked => {
+                        root.apps-open = !root.apps-open;
+
+                        if root.apps-open {
+                            root.show_apps();
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 60px;
+                height: 60px;
+                border-radius: 30px;
+                background: #25282F;
+
+                Image {
+                    source: @image-url("/home/sakura/Downloads/folder.svg");
+                    colorize: #B8BEC9;
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+
+            Rectangle {
+                width: 60px;
+                height: 60px;
+                border-radius: 30px;
+                background: #25282F;
+
+                Image {
+                    source: @image-url("/home/sakura/Downloads/zap.svg");
+                    colorize: #B8BEC9;
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+
+            Rectangle {
+                width: 60px;
+                height: 60px;
+                border-radius: 30px;
+                background: #25282F;
+
+                Image {
+                    source: @image-url("/home/sakura/Downloads/clipboard-pen.svg");
+                    colorize: #B8BEC9;
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+
+        if root.apps-open: Rectangle{
+            height: 350px;
+            background: #1C1E23;
+            border-radius: 22px;
+
+            ScrollView {
+                width: parent.width;
+                height: parent.height;
+
+                FlexboxLayout {
+                    padding: 16px;
+                    spacing: 12px;
+
+                    flex-direction: row;
+                    flex-wrap: wrap;
+
+                    for app in root.apps: Rectangle {
+                        width: 90px;
+                        height: 90px;
+
+                        border-radius: 12px;
+
+                        background: app-touch.has-hover
+                            ? #2A2E38
+                            : transparent;
+
+                        place := Rectangle {
+                            width: 50px;
+                            height: 50px;
+
+                            x: (parent.width - self.width) / 2;
+                            y: 6px;
+                            background: #343A50;
+                        }
+
+                        Text {
+                            text: app.name;
+
+                            x: 4px;
+                            y: 62px;
+
+                            width: parent.width - 8px;
+                            height: 20px;
+                            color: #F3F4F6;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            overflow: elide;
+                        }
+
+                        Image {
+                            source: app.icon;
+
+                            x: place.x;
+                            y: place.y;
+
+                            width: 50px;
+                            height: 50px;
+
+                            image-fit: contain;
+                        }
+
+                        app-touch := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+
+                            clicked => {
+                                root.launch-app(app.command);
+                            }
+                        }
+
+                    }
+
+                }
+            }
+        }
+
+    }
+}
