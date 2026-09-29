@@ -17,8 +17,14 @@ export component MainWindow inherits Window {
     height: 420px;
     background: transparent;
 
-    VerticalLayout {
-        spacing: 10px;
+    FocusScope {
+        KeyBinding {
+            keys: @keys(Escape);
+            activated => { root.close(); }
+        }
+
+        VerticalLayout {
+            spacing: 10px;
 
         HorizontalLayout {
             height: 60px;
@@ -206,5 +212,6 @@ export component MainWindow inherits Window {
             }
         }
 
+        }
     }
 }
