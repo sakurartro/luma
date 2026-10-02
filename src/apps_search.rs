@@ -5,6 +5,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::fs;
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -60,13 +61,13 @@ impl Apps {
                     && let Some(ext) = path.extension()
                 {
                     if ext == "png" || ext == "svg" {
-                        icons.insert(
+                        icons.entry(
                             path.file_stem()
                                 .unwrap_or_default()
                                 .to_string_lossy()
                                 .into_owned(),
-                            path.to_path_buf(),
-                        );
+                        )
+                        .or_insert(path.to_path_buf());
                     }
                 }
             }
@@ -75,9 +76,12 @@ impl Apps {
         Ok(icons)
     }
 
-    pub fn parse_config(conn: &mut Connection, paths: Vec<PathBuf>) -> Result<Self> {
+    pub fn parse_config(
+        conn: &mut Connection,
+        icons: &HashMap<String, PathBuf>,
+        paths: Vec<PathBuf>,
+    ) -> Result<Self> {
         let mut apps: Vec<App> = Vec::new();
-        let icons = Self::initial_icons_scan()?;
         for path in paths {
             let content = fs::read_to_string(&path)?;
             let desktop_entry: Vec<&str> = content
@@ -127,8 +131,7 @@ impl Apps {
                         icon_path.push_str(clean_icon);
                     }
                 } else {
-                    if let Some(icon_from_hash) = icons.get(clean_icon) {
-                        icon_path.push_str(&icon_from_hash.to_string_lossy());
+                    if let Some(icon_from_hash) = icons.get(clean_icon) {                        icon_path.push_str(&icon_from_hash.to_string_lossy());
                     }
                 }
             }
@@ -148,7 +151,7 @@ impl Apps {
         }
 
         for chunk in apps.chunks(100) {
-            let _ = insert_batch(chunk, conn)?;
+            insert_batch(chunk, conn)?;
         }
 
         Ok(Self { apps })
@@ -159,8 +162,8 @@ impl Apps {
         Ok(Self { apps })
     }
 
-    pub fn find_apps(conn: &mut Connection) -> Result<Self> {
+    pub fn find_apps(conn: &mut Connection, icons: &HashMap<String, PathBuf>) -> Result<Self> {
         let paths = Self::find_apps_paths("/usr/share/applications", "desktop")?;
-        Self::parse_config(conn, paths)
+        Self::parse_config(conn, icons, paths)
     }
 }

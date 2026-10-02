@@ -5,27 +5,26 @@ mod watcher;
 use apps_search::Apps;
 use db_init::DbState;
 use slint::VecModel;
+use std::collections::HashMap;
 use std::rc::Rc;
 use watcher::start_watcher;
 mod apps_search;
+use crate::apps_search::App;
 use anyhow::Result;
+use std::cell::RefCell;
 use std::path::Path;
 use std::process::Command;
 
-fn main() -> Result<()> {
-    start_watcher();
-    let mut db_state = DbState::init()?;
-    let apps_obj = Apps::find_apps(&mut db_state.conn)?;
-    let apps = apps_obj.apps;
-    let icons = Apps::initial_icons_scan()?;
-    println!("{:?}", icons);
-    let main_window = MainWindow::new()?;
-    let weak_window = main_window.as_weak();
-    slint::set_xdg_app_id("luma-rust")?;
-    let slint_apps: Vec<AppItem> = apps
-        .into_iter()
+fn build_items(apps: Vec<App>, cache: &RefCell<HashMap<String, slint::Image>>) -> Vec<AppItem> {
+    apps.into_iter()
         .map(|app| {
-            let icon = slint::Image::load_from_path(Path::new(&app.icon_path)).unwrap_or_default();
+            let icon = cache
+                .borrow_mut()
+                .entry(app.icon_path.clone())
+                .or_insert_with(|| {
+                    slint::Image::load_from_path(Path::new(&app.icon_path)).unwrap_or_default()
+                })
+                .clone();
             AppItem {
                 name: app.app_name.into(),
                 path: app.path.into(),
@@ -33,11 +32,23 @@ fn main() -> Result<()> {
                 icon,
             }
         })
-        .collect();
+        .collect()
+}
 
+fn main() -> Result<()> {
+    let icons = Apps::initial_icons_scan()?;
+    let mut db_state = DbState::init()?;
+    let apps_obj = Apps::find_apps(&mut db_state.conn, &icons)?;
+    start_watcher(icons);
+    let apps = apps_obj.apps;
+    let main_window = MainWindow::new()?;
+    let weak_window = main_window.as_weak();
+    slint::set_xdg_app_id("luma-rust")?;
+    let icon_cache = Rc::new(RefCell::new(HashMap::new()));
+    let slint_apps = build_items(apps, &icon_cache);
     let model = Rc::new(VecModel::from(slint_apps));
     main_window.on_show_apps({
-        // let model = model.clone();
+        let icon_cache = icon_cache.clone();
         move || {
             if let Some(window) = weak_window.upgrade() {
                 let apps_refresh_obj = match Apps::refresh(&mut db_state.conn) {
@@ -48,23 +59,9 @@ fn main() -> Result<()> {
                     }
                 };
                 let refreshed_apps = apps_refresh_obj.apps;
-                let slint_apps: Vec<AppItem> = refreshed_apps
-                    .into_iter()
-                    .map(|app| {
-                        let icon = slint::Image::load_from_path(Path::new(&app.icon_path))
-                            .unwrap_or_default();
-                        AppItem {
-                            name: app.app_name.into(),
-                            path: app.path.into(),
-                            command: app.command.into(),
-                            icon,
-                        }
-                    })
-                    .collect();
+                let slint_apps = build_items(refreshed_apps, &icon_cache);
 
-                let model = Rc::new(VecModel::from(slint_apps));
-
-                window.set_apps(model.into());
+                window.set_apps(Rc::new(VecModel::from(slint_apps)).into());
             }
         }
     });
