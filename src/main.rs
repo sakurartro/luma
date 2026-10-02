@@ -1,10 +1,12 @@
 slint::include_modules!();
 mod db_init;
 mod db_service;
+mod toggle;
 mod watcher;
 use apps_search::Apps;
 use db_init::DbState;
 use slint::VecModel;
+use slint::winit_030::{WinitWindowAccessor, invoke_from_active_event_loop};
 use std::collections::HashMap;
 use std::rc::Rc;
 use watcher::start_watcher;
@@ -35,7 +37,22 @@ fn build_items(apps: Vec<App>, cache: &RefCell<HashMap<String, slint::Image>>) -
         .collect()
 }
 
+fn toggle_window(window: &MainWindow) {
+    if window.window().is_visible() {
+        let _ = window.hide();
+    } else {
+        let _ = window.show();
+        window.window().with_winit_window(|w| w.focus_window());
+    }
+}
+
 fn main() -> Result<()> {
+    // --toggle cold start goes to the background hidden; a plain launch shows the window.
+    let toggle_arg = std::env::args().any(|arg| arg == "--toggle");
+    if toggle_arg && toggle::notify_running() {
+        return Ok(());
+    }
+
     let icons = Apps::initial_icons_scan()?;
     let mut db_state = DbState::init()?;
     let apps_obj = Apps::find_apps(&mut db_state.conn, &icons)?;
@@ -76,6 +93,22 @@ fn main() -> Result<()> {
             eprintln!("Failed to launch {program}, {err}");
         }
     });
-    main_window.run()?;
+
+    let weak_window = main_window.as_weak();
+    toggle::start_listener(move || {
+        let weak_window = weak_window.clone();
+        let _ = invoke_from_active_event_loop(move |_| {
+            if let Some(window) = weak_window.upgrade() {
+                toggle_window(&window);
+            }
+        });
+    });
+
+    // Window starts hidden (when started via --toggle) and stays alive in the background;
+    // the event loop must not quit when the last window is hidden, hence _until_quit.
+    if !toggle_arg {
+        let _ = main_window.show();
+    }
+    slint::run_event_loop_until_quit()?;
     Ok(())
 }
