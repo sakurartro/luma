@@ -1,5 +1,5 @@
-use crate::apps_search::Apps;
-use crate::db_service::del_app;
+use super::apps_search::Apps;
+use super::db_service::del_app;
 use notify::{EventKind, RecursiveMode, Watcher};
 use rusqlite::Connection;
 use std::collections::HashMap;

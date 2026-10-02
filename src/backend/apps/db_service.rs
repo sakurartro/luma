@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection};
 use anyhow::Result;
-use crate::apps_search::App;
+use super::apps_search::App;
 
 pub fn insert_batch(batch: &[App], conn: &mut Connection) -> Result<()> {
     let tx = conn.transaction()?;

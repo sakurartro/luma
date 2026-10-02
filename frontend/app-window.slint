@@ -11,6 +11,8 @@ export component MainWindow inherits Window {
     in property <[AppItem]> apps;
     callback show_apps();
     callback launch_app(command: string);
+    callback run_query(string);
+    in-out property <string> query-result;
     private property <bool> apps-open: false;
 
     width: 760px;
@@ -54,6 +56,9 @@ export component MainWindow inherits Window {
                         font-size: 20px;
                         color: #F3F4F6;
                         vertical-alignment: center;
+                        accepted => {
+                            root.run_query(self.text);
+                        }
                     }
                 }
             }
@@ -133,6 +138,20 @@ export component MainWindow inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                 }
+            }
+        }
+
+        if root.query-result != "": Rectangle {
+            height: 48px;
+            background: #25282F;
+            border-radius: 16px;
+
+            Text {
+                text: root.query-result;
+                color: #8B9CFF;
+                font-size: 16px;
+                vertical-alignment: center;
+                horizontal-alignment: center;
             }
         }
 

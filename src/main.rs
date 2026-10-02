@@ -1,21 +1,18 @@
 slint::include_modules!();
-mod db_init;
-mod db_service;
+mod backend;
 mod toggle;
-mod watcher;
-use apps_search::Apps;
-use db_init::DbState;
+use anyhow::Result;
+use backend::apps::apps_search::{App, Apps};
+use backend::apps::db_init::DbState;
+use backend::apps::watcher::start_watcher;
+use backend::general_features::engine;
 use slint::VecModel;
 use slint::winit_030::{WinitWindowAccessor, invoke_from_active_event_loop};
-use std::collections::HashMap;
-use std::rc::Rc;
-use watcher::start_watcher;
-mod apps_search;
-use crate::apps_search::App;
-use anyhow::Result;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
+use std::rc::Rc;
 
 fn build_items(apps: Vec<App>, cache: &RefCell<HashMap<String, slint::Image>>) -> Vec<AppItem> {
     apps.into_iter()
@@ -80,6 +77,16 @@ fn main() -> Result<()> {
 
                 window.set_apps(Rc::new(VecModel::from(slint_apps)).into());
             }
+        }
+    });
+    let weak_query = main_window.as_weak();
+    main_window.on_run_query(move |text| {
+        let msg = match engine::general_engine(text.into()) {
+            Ok(out) => out,
+            Err(err) => format!("Error: {err}"),
+        };
+        if let Some(window) = weak_query.upgrade() {
+            window.set_query_result(msg.into());
         }
     });
     main_window.on_launch_app(|command| {

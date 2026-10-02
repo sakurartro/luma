@@ -1,5 +1,4 @@
-use crate::db_service::get_data;
-use crate::db_service::insert_batch;
+use super::db_service::{get_data, insert_batch};
 use anyhow::Ok;
 use anyhow::Result;
 use rusqlite::Connection;

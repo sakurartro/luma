@@ -9,6 +9,9 @@ anyhow = "1"
 slint = { version = "1.18.1", features = ["unstable-winit-030"] }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 notify = "8"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+serde = { version = "1", features = ["derive"] }
+regex = "1"
 
 [build-dependencies]
 slint-build = "1.18.1"
