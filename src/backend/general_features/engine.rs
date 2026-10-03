@@ -1,10 +1,11 @@
+use super::calc::calc;
 use super::currency;
+use anyhow::{Result, anyhow};
 use regex::Regex;
-use anyhow::{anyhow, Result};
 
 pub fn general_engine(input: String) -> Result<String> {
-    let re = Regex::new(r"(\d+(?:\.\d+)?)\s+([A-Za-z]+)\s+to\s+([A-Za-z]+)").unwrap();
-    if let Some(caps) = re.captures(&input) {
+    let cur_re = Regex::new(r"(\d+(?:\.\d+)?)\s+([A-Za-z]+)\s+to\s+([A-Za-z]+)").unwrap();
+    if let Some(caps) = cur_re.captures(&input) {
         let raw_amount = &caps[1];
         let amount: f64 = raw_amount
             .parse()
@@ -16,8 +17,11 @@ pub fn general_engine(input: String) -> Result<String> {
         let output = format!("{amount}{from} is {rate:.2}{to}");
         return Ok(output);
     }
+    let calc_re = Regex::new(r"(\d+)\s*([+-/*])\s(\d+)").unwrap();
+    if let Some(caps) = calc_re.captures(&input) {
+        let ans = calc(&input)?;
+        return Ok(ans);
+    }
 
-    Err(anyhow!("currency convert error"))
-
-
+    Ok("".to_string())
 }

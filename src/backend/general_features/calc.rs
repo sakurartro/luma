@@ -1,5 +1,10 @@
-// TODO: разбор арифметических выражений
-#[allow(dead_code)]
-pub fn evaluate(_expr: &str) -> Option<f64> {
-    None
+use anyhow::{Result, anyhow};
+use evalexpr::eval;
+
+pub fn calc(input: &str) -> Result<String> {
+    let result = match eval(input) {
+        Ok(value) => value.to_string(),
+        Err(_) => return Err(anyhow!("Error calc")),
+    };
+    Ok(result)
 }
