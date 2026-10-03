@@ -13,6 +13,7 @@ export component MainWindow inherits Window {
     callback launch_app(command: string);
     callback run_query(string);
     in-out property <string> query-result;
+    in-out property <string> input-text;
     private property <bool> apps-open: false;
 
     width: 760px;
@@ -51,8 +52,8 @@ export component MainWindow inherits Window {
                         y: (parent.height - self.height) / 2 - 1px;
                     }
 
-                    TextInput {
-                        text: "";
+                    search-input := TextInput {
+                        text <=> root.input-text;
                         font-size: 20px;
                         color: #F3F4F6;
                         vertical-alignment: center;
@@ -143,7 +144,7 @@ export component MainWindow inherits Window {
 
         if root.query-result != "": Rectangle {
             height: 48px;
-            background: #25282F;
+            background: #1C1E23;
             border-radius: 16px;
 
             Text {

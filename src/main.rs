@@ -38,6 +38,9 @@ fn toggle_window(window: &MainWindow) {
     if window.window().is_visible() {
         let _ = window.hide();
     } else {
+        // app lives in background, clear last query for a clean reopen
+        window.set_query_result("".into());
+        window.set_input_text("".into());
         let _ = window.show();
         window.window().with_winit_window(|w| w.focus_window());
     }
