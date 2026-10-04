@@ -12,13 +12,14 @@ pub fn notify_running() -> bool {
     }
 }
 
-pub fn start_listener(on_toggle: impl Fn() + Send + 'static) {
+/// Binds the toggle socket. Called before the heavy init so keybinds during
+/// startup reach us instead of spawning duplicate instances.
+pub fn bind_socket() -> UnixListener {
     let _ = std::fs::remove_file(SOCKET_PATH);
-    let Ok(listener) = UnixListener::bind(SOCKET_PATH) else {
-        eprintln!("failed to bind toggle socket {SOCKET_PATH}");
-        return;
-    };
+    UnixListener::bind(SOCKET_PATH).expect("failed to bind toggle socket")
+}
 
+pub fn start_listener(listener: UnixListener, on_toggle: impl Fn() + Send + 'static) {
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };

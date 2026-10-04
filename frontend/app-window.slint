@@ -12,6 +12,11 @@ export component MainWindow inherits Window {
     callback show_apps();
     callback launch_app(command: string);
     callback run_query(string);
+    callback hide-window();
+
+    public function focus-input() {
+        search-input.focus();
+    }
     in-out property <string> query-result;
     in-out property <string> input-text;
     private property <bool> apps-open: false;
@@ -23,7 +28,7 @@ export component MainWindow inherits Window {
     FocusScope {
         KeyBinding {
             keys: @keys(Escape);
-            activated => { root.close(); }
+            activated => { root.hide-window(); }
         }
 
         VerticalLayout {
