@@ -69,7 +69,11 @@ export component MainWindow inherits Window {
                             }
                         }
                         accepted => {
-                            root.run_query(self.text);
+                            if root.apps-open && root.apps.length > 0 {
+                                root.launch-app(root.apps[0].command);
+                            } else {
+                                root.run_query(self.text);
+                            }
                         }
                     }
                 }
