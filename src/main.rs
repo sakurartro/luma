@@ -146,13 +146,17 @@ fn main() -> Result<()> {
         });
         let weak_query = main_window.as_weak();
         main_window.on_run_query(move |text| {
-            let msg = match engine::general_engine(text.into()) {
-                Ok(out) => out,
-                Err(err) => format!("Error: {err}"),
-            };
-            if let Some(window) = weak_query.upgrade() {
-                window.set_query_result(msg.into());
-            }
+            let weak = weak_query.clone();
+            let text = text.to_string();
+            std::thread::spawn(move || {
+                let msg = match engine::general_engine(text) {
+                    Ok(out) => out,
+                    Err(err) => format!("Error: {err}"),
+                };
+                let _ = weak.upgrade_in_event_loop(move |window| {
+                    window.set_query_result(msg.into());
+                });
+            });
         });
         main_window.on_launch_app(|command| {
             let mut parts = command.split_whitespace();
@@ -233,8 +237,10 @@ fn main() -> Result<()> {
         });
     });
 
-    // A plain launch opens as soon as init completes.
-    if !toggle_arg {
+    // Open right away unless we were started by the service (systemd sets
+    // INVOCATION_ID): a keybind spawn that didn't find a running instance
+    // became the instance itself, so that press must still open the window.
+    if !toggle_arg || std::env::var_os("INVOCATION_ID").is_none() {
         TOGGLES.store(1, Ordering::Relaxed);
     }
 
