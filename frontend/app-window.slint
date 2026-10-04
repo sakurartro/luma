@@ -11,6 +11,7 @@ export component MainWindow inherits Window {
     in property <[AppItem]> apps;
     callback show_apps();
     callback launch_app(command: string);
+    callback search_apps(query: string);
     callback run_query(string);
     callback hide-window();
 
@@ -62,6 +63,11 @@ export component MainWindow inherits Window {
                         font-size: 20px;
                         color: #F3F4F6;
                         vertical-alignment: center;
+                        edited => {
+                            if root.apps-open {
+                                root.search_apps(self.text);
+                            }
+                        }
                         accepted => {
                             root.run_query(self.text);
                         }
@@ -93,6 +99,9 @@ export component MainWindow inherits Window {
 
                         if root.apps-open {
                             root.show_apps();
+                            if root.input-text != "" {
+                                root.search_apps(root.input-text);
+                            }
                         }
                     }
                 }

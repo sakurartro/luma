@@ -4,6 +4,7 @@ mod toggle;
 use anyhow::Result;
 use backend::apps::apps_search::{App, Apps};
 use backend::apps::db_init::DbState;
+use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
 use backend::general_features::engine;
 use slint::VecModel;
@@ -18,24 +19,24 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // Toggle requests from the keybind socket; drained by a timer on the UI thread.
 static TOGGLES: AtomicUsize = AtomicUsize::new(0);
 
-fn build_items(apps: Vec<App>, cache: &RefCell<HashMap<String, slint::Image>>) -> Vec<AppItem> {
-    apps.into_iter()
-        .map(|app| {
-            let icon = cache
-                .borrow_mut()
-                .entry(app.icon_path.clone())
-                .or_insert_with(|| {
-                    slint::Image::load_from_path(Path::new(&app.icon_path)).unwrap_or_default()
-                })
-                .clone();
-            AppItem {
-                name: app.app_name.into(),
-                path: app.path.into(),
-                command: app.command.into(),
-                icon,
-            }
+fn build_item(app: &App, cache: &RefCell<HashMap<String, slint::Image>>) -> AppItem {
+    let icon = cache
+        .borrow_mut()
+        .entry(app.icon_path.clone())
+        .or_insert_with(|| {
+            slint::Image::load_from_path(Path::new(&app.icon_path)).unwrap_or_default()
         })
-        .collect()
+        .clone();
+    AppItem {
+        name: app.app_name.as_str().into(),
+        path: app.path.as_str().into(),
+        command: app.command.as_str().into(),
+        icon,
+    }
+}
+
+fn build_items(apps: &[App], cache: &RefCell<HashMap<String, slint::Image>>) -> Vec<AppItem> {
+    apps.iter().map(|app| build_item(app, cache)).collect()
 }
 
 // Deferred window creation (slint waits for the xdg-desktop-portal appearance
@@ -104,9 +105,11 @@ fn main() -> Result<()> {
 
         let weak_window = main_window.as_weak();
         let icon_cache = Rc::new(RefCell::new(HashMap::new()));
+        let all_apps: Rc<RefCell<Vec<App>>> = Rc::new(RefCell::new(Vec::new()));
 
         main_window.on_show_apps({
             let icon_cache = icon_cache.clone();
+            let all_apps = all_apps.clone();
             move || {
                 if let Some(window) = weak_window.upgrade() {
                     let apps_refresh_obj = match Apps::refresh(&mut db_state.conn) {
@@ -116,10 +119,27 @@ fn main() -> Result<()> {
                             return;
                         }
                     };
+                    *all_apps.borrow_mut() = apps_refresh_obj.apps;
                     window.set_apps(
-                        Rc::new(VecModel::from(build_items(apps_refresh_obj.apps, &icon_cache)))
+                        Rc::new(VecModel::from(build_items(&all_apps.borrow(), &icon_cache)))
                             .into(),
                     );
+                }
+            }
+        });
+        main_window.on_search_apps({
+            let icon_cache = icon_cache.clone();
+            let all_apps = all_apps.clone();
+            let weak = main_window.as_weak();
+            move |query: slint::SharedString| {
+                if let Some(window) = weak.upgrade() {
+                    let apps = all_apps.borrow();
+                    let filtered = fuzzy::fuzzy_search(&apps, query.as_str());
+                    let items: Vec<AppItem> = filtered
+                        .iter()
+                        .map(|app| build_item(app, &icon_cache))
+                        .collect();
+                    window.set_apps(Rc::new(VecModel::from(items)).into());
                 }
             }
         });
