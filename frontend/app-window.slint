@@ -18,6 +18,9 @@ export component MainWindow inherits Window {
     public function focus-input() {
         search-input.focus();
     }
+    public function reset-view() {
+        root.apps-open = false;
+    }
     in-out property <string> query-result;
     in-out property <string> input-text;
     private property <bool> apps-open: false;

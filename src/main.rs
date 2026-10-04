@@ -56,6 +56,7 @@ fn show_window(window: &MainWindow, visible: &Cell<bool>) {
     // app lives in background, clear last query for a clean reopen
     window.set_query_result("".into());
     window.set_input_text("".into());
+    window.invoke_reset_view();
     let _ = window.show();
     visible.set(true);
     window.invoke_focus_input();

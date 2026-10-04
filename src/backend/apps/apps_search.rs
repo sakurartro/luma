@@ -93,8 +93,10 @@ impl Apps {
                 .collect();
 
             let is_application = desktop_entry.iter().any(|line| *line == "Type=Application");
+            let no_display = desktop_entry.iter().any(|line| *line == "NoDisplay=true");
+            let hidden = desktop_entry.iter().any(|line| *line == "Hidden=true");
 
-            if !is_application {
+            if !is_application || no_display || hidden {
                 continue;
             }
 
