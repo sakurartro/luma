@@ -8,13 +8,18 @@ use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
 use backend::general_features::engine;
 use slint::VecModel;
-use slint::winit_030::{WinitWindowAccessor, invoke_from_active_event_loop};
+use slint::winit_030::WinitWindowAccessor;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+// Result of the background init, picked up by the UI-thread drain timer.
+// (No cross-thread invoke: slint can silently drop those around loop start.)
+static INIT_DB: Mutex<Option<DbState>> = Mutex::new(None);
 
 // Toggle requests from the keybind socket; drained by a timer on the UI thread.
 static TOGGLES: AtomicUsize = AtomicUsize::new(0);
@@ -189,7 +194,13 @@ fn main() -> Result<()> {
     }
 
     fn drain_toggles() {
-        UI.with_borrow_mut(|s| match s {
+        UI.with_borrow_mut(|s| {
+            if let UiState::NotReady = s {
+                if let Some(db_state) = INIT_DB.lock().unwrap().take() {
+                    *s = UiState::Fresh { db_state };
+                }
+            }
+            match s {
             UiState::NotReady => {} // init still running; counter keeps accumulating
             UiState::Fresh { .. } => {
                 if TOGGLES.swap(0, Ordering::Relaxed) > 0 {
@@ -211,12 +222,13 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            }
         });
     }
 
     // Heavy init in the background so the event loop (and the toggle socket)
-    // is up in milliseconds; the result is handed over to the UI thread.
-    std::thread::spawn(move || {
+    // is up in milliseconds; the drain timer picks up the result.
+    std::thread::spawn(|| {
         let init = (|| -> Result<DbState> {
             let icons = Apps::initial_icons_scan()?;
             let mut db_state = DbState::init()?;
@@ -225,22 +237,16 @@ fn main() -> Result<()> {
             let _ = apps_obj.apps;
             Ok(db_state)
         })();
-        let _ = invoke_from_active_event_loop(move |_| {
-            UI.with_borrow_mut(|s| {
-                if let UiState::NotReady = s {
-                    match init {
-                        Ok(db_state) => *s = UiState::Fresh { db_state },
-                        Err(err) => eprintln!("init error: {err}"),
-                    }
-                }
-            });
-        });
+        match init {
+            Ok(db_state) => *INIT_DB.lock().unwrap() = Some(db_state),
+            Err(err) => eprintln!("init error: {err}"),
+        }
     });
 
     // Open right away unless we were started by the service (systemd sets
     // INVOCATION_ID): a keybind spawn that didn't find a running instance
     // became the instance itself, so that press must still open the window.
-    if !toggle_arg || std::env::var_os("INVOCATION_ID").is_none() {
+    if !toggle_arg || std::env::var_os("LUMA_SERVICE").is_none() {
         TOGGLES.store(1, Ordering::Relaxed);
     }
 
