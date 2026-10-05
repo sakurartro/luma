@@ -28,6 +28,8 @@ impl DbState {
                     REFERENCES applications(id) ON DELETE CASCADE,
                 category TEXT NOT NULL
                     CHECK (category = trim(category) AND category <> ''),
+                times_launched INTEGER NOT NULL DEFAULT 0,
+                last_launched INTEGER,
                 PRIMARY KEY (application_id, category)
             );
 
