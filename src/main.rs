@@ -4,9 +4,11 @@ mod toggle;
 use anyhow::Result;
 use backend::apps::apps_search::{App, Apps};
 use backend::apps::db_init::DbState;
+use backend::apps::db_service::{get_category_scores, record_launch};
 use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
 use backend::general_features::engine;
+use rusqlite::Connection;
 use slint::VecModel;
 use slint::winit_030::WinitWindowAccessor;
 use std::cell::{Cell, RefCell};
@@ -42,6 +44,20 @@ fn build_item(app: &App, cache: &RefCell<HashMap<String, slint::Image>>) -> AppI
 
 fn build_items(apps: &[App], cache: &RefCell<HashMap<String, slint::Image>>) -> Vec<AppItem> {
     apps.iter().map(|app| build_item(app, cache)).collect()
+}
+
+// fuzzy name match ∩ selected category; empty category = all
+fn filter_items(
+    apps: &[App],
+    query: &str,
+    category: &str,
+    cache: &RefCell<HashMap<String, slint::Image>>,
+) -> Vec<AppItem> {
+    fuzzy::fuzzy_search(apps, query)
+        .into_iter()
+        .filter(|app| category.is_empty() || app.categories.iter().any(|cat| cat == category))
+        .map(|app| build_item(app, cache))
+        .collect()
 }
 
 // Deferred window creation (slint waits for the xdg-desktop-portal appearance
@@ -114,7 +130,6 @@ fn main() -> Result<()> {
         Live {
             window: MainWindow,
             visible: Rc<Cell<bool>>,
-            icon_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
         },
     }
 
@@ -147,6 +162,17 @@ fn main() -> Result<()> {
                         }
                     };
                     *all_apps.borrow_mut() = apps_refresh_obj.apps;
+                    if let Ok(cats) = get_category_scores(&mut db_state.conn) {
+                        window.set_categories(
+                            Rc::new(VecModel::from(
+                                cats.into_iter()
+                                    .map(|(name, _)| name.into())
+                                    .collect::<Vec<slint::SharedString>>(),
+                            ))
+                            .into(),
+                        );
+                    }
+                    window.set_selected_category("".into());
                     window.set_apps(
                         Rc::new(VecModel::from(build_items(&all_apps.borrow(), &icon_cache)))
                             .into(),
@@ -161,11 +187,29 @@ fn main() -> Result<()> {
             move |query: slint::SharedString| {
                 if let Some(window) = weak.upgrade() {
                     let apps = all_apps.borrow();
-                    let filtered = fuzzy::fuzzy_search(&apps, query.as_str());
-                    let items: Vec<AppItem> = filtered
-                        .iter()
-                        .map(|app| build_item(app, &icon_cache))
-                        .collect();
+                    let items = filter_items(
+                        &apps,
+                        query.as_str(),
+                        window.get_selected_category().as_str(),
+                        &icon_cache,
+                    );
+                    window.set_apps(Rc::new(VecModel::from(items)).into());
+                }
+            }
+        });
+        let weak_category = main_window.as_weak();
+        main_window.on_filter_category({
+            let icon_cache = icon_cache.clone();
+            let all_apps = all_apps.clone();
+            move |category: slint::SharedString| {
+                if let Some(window) = weak_category.upgrade() {
+                    let apps = all_apps.borrow();
+                    let items = filter_items(
+                        &apps,
+                        window.get_input_text().as_str(),
+                        category.as_str(),
+                        &icon_cache,
+                    );
                     window.set_apps(Rc::new(VecModel::from(items)).into());
                 }
             }
@@ -193,6 +237,17 @@ fn main() -> Result<()> {
 
             if let Err(err) = Command::new(program).args(parts).spawn() {
                 eprintln!("Failed to launch {program}, {err}");
+                return;
+            }
+
+            // Own connection (same pattern as watcher.rs); launches are rare.
+            match Connection::open("main.sqlite3") {
+                Ok(mut conn) => {
+                    if let Err(err) = record_launch(&mut conn, &app.path) {
+                        eprintln!("failed to record launch of {program}: {err}");
+                    }
+                }
+                Err(err) => eprintln!("failed to open db for launch record: {err}"),
             }
         });
 
@@ -210,7 +265,6 @@ fn main() -> Result<()> {
         Ok(UiState::Live {
             window: main_window,
             visible,
-            icon_cache,
         })
     }
 
@@ -241,7 +295,7 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            UiState::Live { window, visible, .. } => {
+            UiState::Live { window, visible } => {
                 if TOGGLES.swap(0, Ordering::Relaxed) > 0 {
                     if visible.get() {
                         hide_window(window, visible);

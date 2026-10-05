@@ -6,7 +6,6 @@ pub struct DbState {
 }
 
 impl DbState {
-
     pub fn init() -> Result<Self> {
         let conn = Connection::open("main.sqlite3")?;
 
@@ -20,7 +19,8 @@ impl DbState {
                 app_path TEXT NOT NULL UNIQUE,
                 icon_path TEXT,
                 command TEXT,
-                launch_count INTEGER NOT NULL DEFAULT 0
+                times_launched INTEGER NOT NULL DEFAULT 0,
+                last_launched INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS application_categories (
@@ -28,6 +28,8 @@ impl DbState {
                     REFERENCES applications(id) ON DELETE CASCADE,
                 category TEXT NOT NULL
                     CHECK (category = trim(category) AND category <> ''),
+                times_launched INTEGER NOT NULL DEFAULT 0,
+                last_launched INTEGER,
                 PRIMARY KEY (application_id, category)
             );
 
@@ -38,5 +40,4 @@ impl DbState {
 
         Ok(Self { conn })
     }
-
 }

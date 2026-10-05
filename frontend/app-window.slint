@@ -9,9 +9,12 @@ export struct AppItem {
 
 export component MainWindow inherits Window {
     in property <[AppItem]> apps;
+    in property <[string]> categories;
+    in-out property <string> selected-category;
     callback show_apps();
-    callback launch_app(command: string);
+    callback launch_app(AppItem);
     callback search_apps(query: string);
+    callback filter_category(string);
     callback run_query(string);
     callback hide-window();
 
@@ -20,6 +23,7 @@ export component MainWindow inherits Window {
     }
     public function reset-view() {
         root.apps-open = false;
+        root.selected-category = "";
     }
     in-out property <string> query-result;
     in-out property <string> input-text;
@@ -73,7 +77,7 @@ export component MainWindow inherits Window {
                         }
                         accepted => {
                             if root.apps-open && root.apps.length > 0 {
-                                root.launch-app(root.apps[0].command);
+                                root.launch-app(root.apps[0]);
                             } else {
                                 root.run_query(self.text);
                             }
@@ -182,6 +186,49 @@ export component MainWindow inherits Window {
             background: #1C1E23;
             border-radius: 22px;
 
+            VerticalLayout {
+
+            Flickable {
+                height: 40px;
+                content-width: pills-row.preferred-width;
+
+                pills-row := HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 10px;
+                spacing: 8px;
+                alignment: start;
+
+                for cat in root.categories: Rectangle {
+                    height: 28px;
+                    min-width: cat-text.preferred-width + 24px;
+                    horizontal-stretch: 0;
+                    border-radius: 14px;
+                    background: root.selected-category == cat ? #343A50 : #25282F;
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+
+                        cat-text := Text {
+                            text: cat;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            color: root.selected-category == cat ? #F3F4F6 : #B8BEC9;
+                            overflow: elide;
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => {
+                            root.selected-category = root.selected-category == cat ? "" : cat;
+                            root.filter_category(root.selected-category);
+                        }
+                    }
+                }
+                }
+            }
+
             ScrollView {
                 width: parent.width;
                 height: parent.height;
@@ -243,7 +290,7 @@ export component MainWindow inherits Window {
                             height: parent.height;
 
                             clicked => {
-                                root.launch-app(app.command);
+                                root.launch-app(app);
                             }
                         }
 
@@ -251,8 +298,30 @@ export component MainWindow inherits Window {
 
                 }
             }
+            }
         }
 
+        }
+    }
+}
+
+export component LoadingWindow inherits Window {
+    width: 240px;
+    height: 52px;
+    background: transparent;
+
+    Rectangle {
+        border-radius: 26px;
+        background: #1C1E23;
+
+        Text {
+            text: "Loading...";
+            color: #F3F4F6;
+            font-size: 15px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
         }
     }
 }
