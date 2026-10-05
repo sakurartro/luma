@@ -10,7 +10,7 @@ export struct AppItem {
 export component MainWindow inherits Window {
     in property <[AppItem]> apps;
     callback show_apps();
-    callback launch_app(command: string);
+    callback launch_app(AppItem);
     callback search_apps(query: string);
     callback run_query(string);
     callback hide-window();
@@ -73,7 +73,7 @@ export component MainWindow inherits Window {
                         }
                         accepted => {
                             if root.apps-open && root.apps.length > 0 {
-                                root.launch-app(root.apps[0].command);
+                                root.launch-app(root.apps[0]);
                             } else {
                                 root.run_query(self.text);
                             }
@@ -243,7 +243,7 @@ export component MainWindow inherits Window {
                             height: parent.height;
 
                             clicked => {
-                                root.launch-app(app.command);
+                                root.launch-app(app);
                             }
                         }
 
@@ -253,6 +253,27 @@ export component MainWindow inherits Window {
             }
         }
 
+        }
+    }
+}
+
+export component LoadingWindow inherits Window {
+    width: 240px;
+    height: 52px;
+    background: transparent;
+
+    Rectangle {
+        border-radius: 26px;
+        background: #1C1E23;
+
+        Text {
+            text: "Loading...";
+            color: #F3F4F6;
+            font-size: 15px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
         }
     }
 }

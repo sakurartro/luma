@@ -38,7 +38,7 @@ pub fn start_watcher(icons: HashMap<String, PathBuf>) {
                 EventKind::Remove(_) => {
                     for path in event.paths {
                         if path.extension().and_then(|ext| ext.to_str()) == Some("desktop") {
-                            del_app(&mut conn, path.to_string_lossy().to_string());
+                            let _ = del_app(&mut conn, path.to_string_lossy().to_string());
                         }
                     }
                 }

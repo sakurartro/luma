@@ -4,9 +4,11 @@ mod toggle;
 use anyhow::Result;
 use backend::apps::apps_search::{App, Apps};
 use backend::apps::db_init::DbState;
+use backend::apps::db_service::record_launch;
 use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
 use backend::general_features::engine;
+use rusqlite::Connection;
 use slint::VecModel;
 use slint::winit_030::WinitWindowAccessor;
 use std::cell::{Cell, RefCell};
@@ -114,7 +116,6 @@ fn main() -> Result<()> {
         Live {
             window: MainWindow,
             visible: Rc<Cell<bool>>,
-            icon_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
         },
     }
 
@@ -193,6 +194,17 @@ fn main() -> Result<()> {
 
             if let Err(err) = Command::new(program).args(parts).spawn() {
                 eprintln!("Failed to launch {program}, {err}");
+                return;
+            }
+
+            // Own connection (same pattern as watcher.rs); launches are rare.
+            match Connection::open("main.sqlite3") {
+                Ok(mut conn) => {
+                    if let Err(err) = record_launch(&mut conn, &app.path) {
+                        eprintln!("failed to record launch of {program}: {err}");
+                    }
+                }
+                Err(err) => eprintln!("failed to open db for launch record: {err}"),
             }
         });
 
@@ -210,7 +222,6 @@ fn main() -> Result<()> {
         Ok(UiState::Live {
             window: main_window,
             visible,
-            icon_cache,
         })
     }
 
@@ -241,7 +252,7 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            UiState::Live { window, visible, .. } => {
+            UiState::Live { window, visible } => {
                 if TOGGLES.swap(0, Ordering::Relaxed) > 0 {
                     if visible.get() {
                         hide_window(window, visible);

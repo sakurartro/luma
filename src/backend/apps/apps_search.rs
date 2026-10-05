@@ -15,6 +15,9 @@ pub struct App {
     pub command: String,
     pub icon_path: String,
     pub categories: Vec<String>,
+    pub time_launched: i64,
+    pub last_launched: i64,
+    pub score: i64,
 }
 
 pub struct Apps {
@@ -146,6 +149,9 @@ impl Apps {
                     command: command.unwrap_or("").to_owned(),
                     icon_path: icon_path,
                     categories: categories,
+                    time_launched: 0,
+                    last_launched: 0,
+                    score: 0,
                 };
                 apps.push(app);
             }
