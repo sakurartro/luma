@@ -87,6 +87,23 @@ fn main() -> Result<()> {
     // initialize then reach us instead of spawning duplicate instances.
     let listener = toggle::bind_socket();
 
+    // Open right away unless we were started by the service (systemd sets
+    // LUMA_SERVICE=1 in the unit): a keybind spawn that didn't find a running
+    // instance became the instance itself, so that press must open the window.
+    let open_on_start = !toggle_arg || std::env::var_os("LUMA_SERVICE").is_none();
+
+    // Tiny "Loading..." pill shown instantly on keybind while the background
+    // init runs; hidden once the real window is up. Not shown for service start.
+    // set_xdg_app_id goes into create_ui: it fails with NoPlatform before any
+    // window exists, because it does not initialize the platform itself.
+    let loading = if open_on_start {
+        let w = LoadingWindow::new()?;
+        let _ = w.show();
+        Some(w)
+    } else {
+        None
+    };
+
     enum UiState {
         // Background init (icons/db scan) still running; toggles wait in TOGGLES.
         NotReady,
@@ -103,6 +120,10 @@ fn main() -> Result<()> {
 
     thread_local! {
         static UI: RefCell<UiState> = RefCell::new(UiState::NotReady);
+        static LOADING: RefCell<Option<LoadingWindow>> = const { RefCell::new(None) };
+    }
+    if let Some(l) = loading {
+        LOADING.with_borrow_mut(|slot| *slot = Some(l));
     }
 
     fn create_ui(mut db_state: DbState) -> Result<UiState> {
@@ -163,8 +184,8 @@ fn main() -> Result<()> {
                 });
             });
         });
-        main_window.on_launch_app(|command| {
-            let mut parts = command.split_whitespace();
+        main_window.on_launch_app(|app| {
+            let mut parts = app.command.split_whitespace();
 
             let Some(program) = parts.next() else {
                 return;
@@ -207,7 +228,14 @@ fn main() -> Result<()> {
                     let old = std::mem::replace(s, UiState::NotReady);
                     if let UiState::Fresh { db_state } = old {
                         match create_ui(db_state) {
-                            Ok(live) => *s = live,
+                            Ok(live) => {
+                                *s = live;
+                                LOADING.with_borrow_mut(|slot| {
+                                    if let Some(lw) = slot.take() {
+                                        let _ = lw.hide();
+                                    }
+                                });
+                            }
                             Err(err) => eprintln!("failed to create window: {err}"),
                         }
                     }
@@ -243,10 +271,7 @@ fn main() -> Result<()> {
         }
     });
 
-    // Open right away unless we were started by the service (systemd sets
-    // INVOCATION_ID): a keybind spawn that didn't find a running instance
-    // became the instance itself, so that press must still open the window.
-    if !toggle_arg || std::env::var_os("LUMA_SERVICE").is_none() {
+    if open_on_start {
         TOGGLES.store(1, Ordering::Relaxed);
     }
 
