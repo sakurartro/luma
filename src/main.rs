@@ -3,7 +3,7 @@ mod backend;
 mod toggle;
 use anyhow::Result;
 use backend::apps::apps_search::{App, Apps};
-use backend::apps::db_init::DbState;
+use backend::apps::db_init::{DbState, db_path};
 use backend::apps::db_service::{get_category_scores, record_launch};
 use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
@@ -241,7 +241,7 @@ fn main() -> Result<()> {
             }
 
             // Own connection (same pattern as watcher.rs); launches are rare.
-            match Connection::open("main.sqlite3") {
+            match Connection::open(db_path()) {
                 Ok(mut conn) => {
                     if let Err(err) = record_launch(&mut conn, &app.path) {
                         eprintln!("failed to record launch of {program}: {err}");

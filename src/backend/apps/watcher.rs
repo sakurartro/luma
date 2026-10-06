@@ -8,7 +8,8 @@ use std::{path::Path, sync::mpsc, thread};
 
 pub fn start_watcher(icons: HashMap<String, PathBuf>) {
     thread::spawn(move || {
-        let mut conn = Connection::open("main.sqlite3").expect("Failed to init db conn by watcher");
+        let mut conn =
+            Connection::open(super::db_init::db_path()).expect("Failed to init db conn by watcher");
         let (tx, rx) = mpsc::channel();
         let mut watcher = notify::recommended_watcher(tx).expect("failed to create watcher");
 
