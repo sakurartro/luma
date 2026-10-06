@@ -1,13 +1,25 @@
 use anyhow::Result;
 use rusqlite::Connection;
+use std::path::PathBuf;
 
 pub struct DbState {
     pub conn: Connection,
 }
 
+/// $XDG_CONFIG_HOME/luma/main.sqlite3 (defaults to ~/.config).
+pub fn db_path() -> PathBuf {
+    let dir = match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => PathBuf::from(std::env::var_os("HOME").expect("HOME not set")).join(".config"),
+    };
+    let dir = dir.join("luma");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("main.sqlite3")
+}
+
 impl DbState {
     pub fn init() -> Result<Self> {
-        let conn = Connection::open("main.sqlite3")?;
+        let conn = Connection::open(db_path())?;
 
         conn.execute_batch(
             r#"
