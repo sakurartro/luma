@@ -39,6 +39,19 @@ export component MainWindow inherits Window {
             activated => { root.hide-window(); }
         }
 
+        KeyBinding {
+            keys: @keys(Alt + "1");
+            activated => {
+                root.apps-open = !root.apps-open;
+                if root.apps-open {
+                    root.show_apps();
+                    if root.input-text != "" {
+                        root.search_apps(root.input-text);
+                    }
+                }
+            }
+        }
+
         VerticalLayout {
             spacing: 10px;
 
@@ -70,6 +83,19 @@ export component MainWindow inherits Window {
                         font-size: 20px;
                         color: #F3F4F6;
                         vertical-alignment: center;
+                        key-pressed(event) => {
+                            if event.modifiers.alt && event.text == "1" {
+                                root.apps-open = !root.apps-open;
+                                if root.apps-open {
+                                    root.show_apps();
+                                    if root.input-text != "" {
+                                        root.search_apps(root.input-text);
+                                    }
+                                }
+                                return accept;
+                            }
+                            return reject;
+                        }
                         edited => {
                             if root.apps-open {
                                 root.search_apps(self.text);
