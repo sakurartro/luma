@@ -1,0 +1,28 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    # Ubuntu 22.04 for the lowest glibc requirement: binary runs everywhere newer.
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GUI build dependencies (slint/winit)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libxcb1-dev
+      - name: Build release binary
+        run: cargo build --release
+      - name: Rename artifact (uname -m matches install.sh)
+        run: |
+          ARTIFACT="luma_rust-$(uname -m)"
+          cp target/release/luma_rust "$ARTIFACT"
+          echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARTIFACT }}
