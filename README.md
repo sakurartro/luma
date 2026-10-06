@@ -5,6 +5,14 @@
 ## Установка
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/sakurartro/luma/main/install.sh | sh
+```
+
+Скрипт скачает бинарник в `~/.local/bin` (или в переданный путь: `... | sh -s /usr/local/bin`).
+
+Альтернатива для разработчиков:
+
+```sh
 cargo install --path .
 ```
 
