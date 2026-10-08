@@ -108,7 +108,14 @@ impl Apps {
                 .find_map(|line| line.strip_prefix("Name="));
             let command = desktop_entry
                 .iter()
-                .find_map(|line| line.strip_prefix("Exec="));
+                .find_map(|line| line.strip_prefix("Exec="))
+                // strip desktop-entry field codes (%u %F %i ...) — we never pass files/URLs
+                .map(|exec| {
+                    exec.split_whitespace()
+                        .filter(|arg| !(arg.len() == 2 && arg.starts_with('%')))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                });
 
             let icon = desktop_entry
                 .iter()
@@ -146,7 +153,7 @@ impl Apps {
                 let app = App {
                     app_name: name.unwrap_or("").to_owned(),
                     path: path.to_string_lossy().into_owned(),
-                    command: command.unwrap_or("").to_owned(),
+                    command: command.unwrap_or_default(),
                     icon_path: icon_path,
                     categories: categories,
                     time_launched: 0,

@@ -14,7 +14,9 @@ use slint::winit_030::WinitWindowAccessor;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::Path;
+use std::os::unix::process::CommandExt;
 use std::process::Command;
+use std::process::Stdio;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -235,7 +237,13 @@ fn main() -> Result<()> {
                 return;
             };
 
-            if let Err(err) = Command::new(program).args(parts).spawn() {
+            if let Err(err) = Command::new(program)
+                .args(parts)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()
+            {
                 eprintln!("Failed to launch {program}, {err}");
                 return;
             }
