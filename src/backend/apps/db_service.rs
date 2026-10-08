@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection};
 use anyhow::Result;
 use super::apps_search::App;
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn now_secs() -> i64 {
@@ -37,9 +38,15 @@ pub fn insert_batch(batch: &[App], conn: &mut Connection) -> Result<()> {
             RETURNING ID
             "#,
         )?;
-        let mut del_categories = tx.prepare(
+        let mut del_stale = tx.prepare(
             r#"
-            DELETE FROM application_categories WHERE application_id = ?
+            DELETE FROM application_categories
+            WHERE application_id = ?1 AND category = ?2
+            "#,
+        )?;
+        let mut existing_stmt = tx.prepare(
+            r#"
+            SELECT category FROM application_categories WHERE application_id = ?1
             "#,
         )?;
         let mut categories_stmt = tx.prepare(
@@ -62,15 +69,20 @@ pub fn insert_batch(batch: &[App], conn: &mut Connection) -> Result<()> {
             |row| row.get(0)
             )?;
 
-            del_categories.execute(params![
-                application_id,
-            ])?;
+            // Sync categories without wiping launch stats: INSERT OR IGNORE
+            // keeps existing rows' times_launched/last_launched, stale rows
+            // (category gone from the .desktop) are dropped.
+            let mut existing: HashSet<String> = existing_stmt
+                .query_map([application_id], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
 
             for category in &app.categories {
-                categories_stmt.execute(params![
-                    application_id,
-                    category,
-                ])?;
+                existing.remove(category);
+                categories_stmt.execute(params![application_id, category])?;
+            }
+
+            for stale in existing {
+                del_stale.execute(params![application_id, stale])?;
             }
 
 
