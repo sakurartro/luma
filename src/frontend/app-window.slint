@@ -29,8 +29,10 @@ export component MainWindow inherits Window {
     in-out property <string> input-text;
     private property <bool> apps-open: false;
 
-    width: 760px;
-    height: 420px;
+    min-width: 760px;
+    max-width: 760px;
+    min-height: 420px;
+    max-height: 420px;
     background: transparent;
 
     FocusScope {
