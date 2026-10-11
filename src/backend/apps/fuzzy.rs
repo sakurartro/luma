@@ -1,24 +1,26 @@
-use super::apps_search::App;
-
-/// Fuzzy subsequence search: returns apps whose names contain all query
+/// Fuzzy subsequence search: returns items whose names contain all query
 /// characters in order, ranked by match quality.
-pub fn fuzzy_search<'a>(apps: &'a [App], query: &str) -> Vec<&'a App> {
+pub fn fuzzy_search<'a, T>(
+    items: &'a [T],
+    name: impl Fn(&'a T) -> &'a str,
+    query: &str,
+) -> Vec<&'a T> {
     if query.is_empty() {
-        return apps.iter().collect();
+        return items.iter().collect();
     }
 
     let query_lower: Vec<char> = query.to_lowercase().chars().collect();
-    let mut scored: Vec<(&App, i32)> = Vec::new();
+    let mut scored: Vec<(&T, i32)> = Vec::new();
 
-    for app in apps {
-        let name_lower: Vec<char> = app.app_name.to_lowercase().chars().collect();
+    for item in items {
+        let name_lower: Vec<char> = name(item).to_lowercase().chars().collect();
         if let Some(score) = score_match(&name_lower, &query_lower) {
-            scored.push((app, score));
+            scored.push((item, score));
         }
     }
 
     scored.sort_by(|a, b| b.1.cmp(&a.1));
-    scored.into_iter().map(|(app, _)| app).collect()
+    scored.into_iter().map(|(item, _)| item).collect()
 }
 
 // ponytail: greedy left-to-right subsequence match with simple scoring;

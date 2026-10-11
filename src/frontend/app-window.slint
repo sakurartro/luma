@@ -9,27 +9,56 @@ export struct AppItem {
     icon: image,
 }
 
+export struct FileItem {
+    name: string,
+    path: string,
+    is-dir: bool,
+}
+
 export component MainWindow inherits Window {
     in property <[AppItem]> apps;
+    in property <[FileItem]> files;
     in property <[string]> categories;
     in-out property <string> selected-category;
+    // 0 = closed, 1 = apps, 2 = files
+    in-out property <int> mode: 0;
     callback show_apps();
+    callback show_files();
     callback launch_app(AppItem);
+    callback open_file(FileItem);
     callback search_apps(query: string);
+    callback search_files(query: string);
     callback filter_category(string);
     callback run_query(string);
     callback hide-window();
+
+    function activate-mode(m: int) {
+        if root.mode == m {
+            root.mode = 0;
+        } else {
+            root.mode = m;
+            if m == 1 {
+                root.show_apps();
+            }
+            if m == 2 {
+                root.show_files();
+            }
+            if root.input-text != "" {
+                if m == 1 { root.search_apps(root.input-text); }
+                if m == 2 { root.search_files(root.input-text); }
+            }
+        }
+    }
 
     public function focus-input() {
         search-input.focus();
     }
     public function reset-view() {
-        root.apps-open = false;
+        root.mode = 0;
         root.selected-category = "";
     }
     in-out property <string> query-result;
     in-out property <string> input-text;
-    private property <bool> apps-open: false;
 
     // Palette (overridable from settings.json via main.rs)
     in property <color> bg: #0E120B;
@@ -54,15 +83,12 @@ export component MainWindow inherits Window {
 
         KeyBinding {
             keys: @keys(Alt + "1");
-            activated => {
-                root.apps-open = !root.apps-open;
-                if root.apps-open {
-                    root.show_apps();
-                    if root.input-text != "" {
-                        root.search_apps(root.input-text);
-                    }
-                }
-            }
+            activated => { root.activate-mode(1); }
+        }
+
+        KeyBinding {
+            keys: @keys(Alt + "2");
+            activated => { root.activate-mode(2); }
         }
 
         // Single bordered panel instead of floating pills
@@ -108,37 +134,40 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                             key-pressed(event) => {
                                 if event.modifiers.alt && event.text == "1" {
-                                    root.apps-open = !root.apps-open;
-                                    if root.apps-open {
-                                        root.show_apps();
-                                        if root.input-text != "" {
-                                            root.search_apps(root.input-text);
-                                        }
-                                    }
+                                    root.activate-mode(1);
+                                    return accept;
+                                }
+                                if event.modifiers.alt && event.text == "2" {
+                                    root.activate-mode(2);
                                     return accept;
                                 }
                                 return reject;
                             }
                             edited => {
-                                if root.apps-open {
+                                if root.mode == 1 {
                                     root.search_apps(self.text);
+                                }
+                                if root.mode == 2 {
+                                    root.search_files(self.text);
                                 }
                             }
                             accepted => {
-                                if root.apps-open && root.apps.length > 0 {
+                                if root.mode == 1 && root.apps.length > 0 {
                                     root.launch-app(root.apps[0]);
+                                } else if root.mode == 2 && root.files.length > 0 {
+                                    root.open-file(root.files[0]);
                                 } else {
                                     root.run_query(self.text);
                                 }
                             }
                         }
 
-                        if root.input-text == "": Text {
-                            text: "Search apps...";
-                            color: root.text-dim;
-                            font-size: 17px;
-                            vertical-alignment: center;
-                        }
+if root.input-text == "": Text {
+                        text: root.mode == 1 ? "Search apps..." : root.mode == 2 ? "Search files..." : "Search...";
+                        color: root.text-dim;
+                        font-size: 17px;
+                        vertical-alignment: center;
+                    }
                     }
                 }
 
@@ -146,13 +175,13 @@ export component MainWindow inherits Window {
                     width: 52px;
                     height: 52px;
                     border-radius: 8px;
-                    background: root.apps-open ? root.selected : root.surface;
+                    background: root.mode == 1 ? root.selected : root.surface;
                     border-width: 1px;
-                    border-color: root.apps-open ? root.accent : root.border;
+                    border-color: root.mode == 1 ? root.accent : root.border;
 
                     Image {
                         source: @image-url("assets/layout-grid.svg");
-                        colorize: root.apps-open ? root.accent : root.text-dim;
+                        colorize: root.mode == 1 ? root.accent : root.text-dim;
                         width: 18px;
                         height: 18px;
                         x: (parent.width - self.width) / 2;
@@ -164,14 +193,7 @@ export component MainWindow inherits Window {
                         height: parent.height;
 
                         clicked => {
-                            root.apps-open = !root.apps-open;
-
-                            if root.apps-open {
-                                root.show_apps();
-                                if root.input-text != "" {
-                                    root.search_apps(root.input-text);
-                                }
-                            }
+                            root.activate-mode(1);
                         }
                     }
                 }
@@ -180,17 +202,26 @@ export component MainWindow inherits Window {
                     width: 52px;
                     height: 52px;
                     border-radius: 8px;
-                    background: root.surface;
+                    background: root.mode == 2 ? root.selected : root.surface;
                     border-width: 1px;
-                    border-color: root.border;
+                    border-color: root.mode == 2 ? root.accent : root.border;
 
                     Image {
                         source: @image-url("assets/folder.svg");
-                        colorize: root.text-dim;
+                        colorize: root.mode == 2 ? root.accent : root.text-dim;
                         width: 18px;
                         height: 18px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
+                    }
+
+                    TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+
+                        clicked => {
+                            root.activate-mode(2);
+                        }
                     }
                 }
 
@@ -247,7 +278,7 @@ export component MainWindow inherits Window {
                 }
             }
 
-            if root.apps-open: VerticalLayout {
+            if root.mode == 1: VerticalLayout {
                 height: 350px;
 
                 Flickable {
@@ -325,7 +356,6 @@ export component MainWindow inherits Window {
 
                             Image {
                                 source: app.icon;
-                                colorize: root.text-dim;
 
                                 x: place.x;
                                 y: place.y;
@@ -360,6 +390,76 @@ export component MainWindow inherits Window {
                 }
             }
 
+            if root.mode == 2: VerticalLayout {
+                height: 350px;
+
+                ScrollView {
+                    width: parent.width;
+                    height: parent.height;
+
+                    FlexboxLayout {
+                        padding-top: 4px;
+                        spacing: 10px;
+
+                        flex-direction: row;
+                        flex-wrap: wrap;
+
+                        for file in root.files: Rectangle {
+                            width: 90px;
+                            height: 92px;
+                            border-radius: 8px;
+                            background: file-touch.has-hover ? root.hover : transparent;
+                            border-width: 1px;
+                            border-color: file-touch.has-hover ? root.accent : transparent;
+
+                            Rectangle {
+                                width: 48px;
+                                height: 48px;
+                                x: (parent.width - self.width) / 2;
+                                y: 8px;
+                                border-radius: 8px;
+                                background: root.surface;
+                                border-width: 1px;
+                                border-color: root.border;
+                            }
+
+                            Image {
+                                source: file.is-dir ? @image-url("assets/folder.svg") : @image-url("assets/file.svg");
+                                colorize: root.accent;
+
+                                x: (parent.width - self.width) / 2;
+                                y: 18px;
+
+                                width: 28px;
+                                height: 28px;
+                                image-fit: contain;
+                            }
+
+                            Text {
+                                text: file.name;
+                                x: 4px;
+                                y: 62px;
+                                width: parent.width - 8px;
+                                height: 20px;
+                                color: root.text;
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                                overflow: elide;
+                            }
+
+                            file-touch := TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+
+                                clicked => {
+                                    root.open-file(file);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Footer hint bar, Walker-style
             Rectangle {
                 height: 30px;
@@ -373,7 +473,7 @@ export component MainWindow inherits Window {
                     padding-right: 12px;
 
                     Text {
-                        text: "Enter: launch  |  Alt+1: apps  |  Esc: close";
+                        text: "Enter: launch  |  Alt+1: apps  |  Alt+2: files  |  Esc: close";
                         color: root.text-dim;
                         font-size: 12px;
                         vertical-alignment: center;

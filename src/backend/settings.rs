@@ -14,6 +14,16 @@ pub struct Settings {
     pub accent: String,
     pub text: String,
     pub text_dim: String,
+    #[serde(default = "default_search_dirs")]
+    pub search_dirs: Vec<String>,
+}
+
+fn default_search_dirs() -> Vec<String> {
+    vec![
+        "~/Documents".into(),
+        "~/Pictures".into(),
+        "~/Desktop".into(),
+    ]
 }
 
 impl Default for Settings {
@@ -27,6 +37,7 @@ impl Default for Settings {
             accent: "#A9B665".into(),
             text: "#E4E7D0".into(),
             text_dim: "#7E8A6C".into(),
+            search_dirs: default_search_dirs(),
         }
     }
 }

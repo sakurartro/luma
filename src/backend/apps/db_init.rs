@@ -52,6 +52,18 @@ impl DbState {
 
             CREATE INDEX IF NOT EXISTS application_categories_by_category
             ON application_categories(category, application_id);
+
+            CREATE TABLE IF NOT EXISTS files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE IF NOT EXISTS folders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE
+            );
             "#,
         )?;
 
