@@ -2834,6 +2834,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "serde",
+ "serde_json",
  "slint",
  "slint-build",
  "walkdir",

@@ -1,5 +1,7 @@
 import { ScrollView } from "std-widgets.slint";
 
+// Omarchy/Walker-ish restyle of the Spotlight layout.
+
 export struct AppItem {
     name: string,
     path: string,
@@ -7,33 +9,73 @@ export struct AppItem {
     icon: image,
 }
 
+export struct FileItem {
+    name: string,
+    path: string,
+    is-dir: bool,
+}
+
 export component MainWindow inherits Window {
     in property <[AppItem]> apps;
+    in property <[FileItem]> files;
     in property <[string]> categories;
     in-out property <string> selected-category;
+    // 0 = closed, 1 = apps, 2 = files
+    in-out property <int> mode: 0;
     callback show_apps();
+    callback show_files();
     callback launch_app(AppItem);
+    callback open_file(FileItem);
     callback search_apps(query: string);
+    callback search_files(query: string);
     callback filter_category(string);
     callback run_query(string);
     callback hide-window();
+
+    function activate-mode(m: int) {
+        if root.mode == m {
+            root.mode = 0;
+        } else {
+            root.mode = m;
+            if m == 1 {
+                root.show_apps();
+            }
+            if m == 2 {
+                root.show_files();
+            }
+            if root.input-text != "" {
+                if m == 1 { root.search_apps(root.input-text); }
+                if m == 2 { root.search_files(root.input-text); }
+            }
+        }
+    }
 
     public function focus-input() {
         search-input.focus();
     }
     public function reset-view() {
-        root.apps-open = false;
+        root.mode = 0;
         root.selected-category = "";
     }
     in-out property <string> query-result;
     in-out property <string> input-text;
-    private property <bool> apps-open: false;
+
+// Palette (overridable from settings.json via main.rs)
+    in property <color> bg: #0E120B;
+    in property <color> surface: #151B10;
+    in property <color> hover: #1E2716;
+    in property <color> selected: #28331C;
+    in property <color> border: #2C3620;
+    in property <color> accent: #A9B665;
+    in property <color> text: #E4E7D0;
+    in property <color> text-dim: #7E8A6C;
 
     min-width: 760px;
     max-width: 760px;
     min-height: 420px;
     max-height: 420px;
     background: transparent;
+    default-font-family: "JetBrainsMono Nerd Font";
 
     FocusScope {
         KeyBinding {
@@ -43,291 +85,413 @@ export component MainWindow inherits Window {
 
         KeyBinding {
             keys: @keys(Alt + "1");
-            activated => {
-                root.apps-open = !root.apps-open;
-                if root.apps-open {
-                    root.show_apps();
-                    if root.input-text != "" {
-                        root.search_apps(root.input-text);
-                    }
-                }
-            }
+            activated => { root.activate-mode(1); }
         }
 
-        VerticalLayout {
-            spacing: 10px;
-
-        HorizontalLayout {
-            height: 60px;
-            spacing: 10px;
-
-            Rectangle {
-                horizontal-stretch: 1;
-                height: 60px;
-                border-radius: 30px;
-                background: #1C1E23;
-
-                HorizontalLayout {
-                    padding-left: 18px;
-                    padding-right: 18px;
-                    spacing: 12px;
-
-                    Image {
-                        source: @image-url("assets/search.svg");
-                        colorize: #8B9CFF;
-                        width: 20px;
-                        height: 20px;
-                        y: (parent.height - self.height) / 2 - 1px;
-                    }
-
-                    search-input := TextInput {
-                        text <=> root.input-text;
-                        font-size: 20px;
-                        color: #F3F4F6;
-                        vertical-alignment: center;
-                        key-pressed(event) => {
-                            if event.modifiers.alt && event.text == "1" {
-                                root.apps-open = !root.apps-open;
-                                if root.apps-open {
-                                    root.show_apps();
-                                    if root.input-text != "" {
-                                        root.search_apps(root.input-text);
-                                    }
-                                }
-                                return accept;
-                            }
-                            return reject;
-                        }
-                        edited => {
-                            if root.apps-open {
-                                root.search_apps(self.text);
-                            }
-                        }
-                        accepted => {
-                            if root.apps-open && root.apps.length > 0 {
-                                root.launch-app(root.apps[0]);
-                            } else {
-                                root.run_query(self.text);
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                width: 60px;
-                height: 60px;
-                border-radius: 30px;
-                background: root.apps-open ? #343A50 : #25282F;
-
-                Image {
-                    source: @image-url("assets/layout-grid.svg");
-                    colorize: #B8BEC9;
-                    width: 20px;
-                    height: 20px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                }
-
-                TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-
-                    clicked => {
-                        root.apps-open = !root.apps-open;
-
-                        if root.apps-open {
-                            root.show_apps();
-                            if root.input-text != "" {
-                                root.search_apps(root.input-text);
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                width: 60px;
-                height: 60px;
-                border-radius: 30px;
-                background: #25282F;
-
-                Image {
-                    source: @image-url("assets/folder.svg");
-                    colorize: #B8BEC9;
-                    width: 20px;
-                    height: 20px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-
-            Rectangle {
-                width: 60px;
-                height: 60px;
-                border-radius: 30px;
-                background: #25282F;
-
-                Image {
-                    source: @image-url("assets/zap.svg");
-                    colorize: #B8BEC9;
-                    width: 20px;
-                    height: 20px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-
-            Rectangle {
-                width: 60px;
-                height: 60px;
-                border-radius: 30px;
-                background: #25282F;
-
-                Image {
-                    source: @image-url("assets/clipboard-pen.svg");
-                    colorize: #B8BEC9;
-                    width: 20px;
-                    height: 20px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
+        KeyBinding {
+            keys: @keys(Alt + "2");
+            activated => { root.activate-mode(2); }
         }
 
-        if root.query-result != "": Rectangle {
-            height: 48px;
-            background: #1C1E23;
-            border-radius: 16px;
-
-            Text {
-                text: root.query-result;
-                color: #8B9CFF;
-                font-size: 16px;
-                vertical-alignment: center;
-                horizontal-alignment: center;
-            }
-        }
-
-        if root.apps-open: Rectangle{
-            height: 350px;
-            background: #1C1E23;
-            border-radius: 22px;
+        // Single bordered panel instead of floating pills
+        Rectangle {
+            background: root.bg;
+            border-width: 2px;
+            border-color: root.border;
+            border-radius: 10px;
 
             VerticalLayout {
+                padding: 14px;
+                spacing: 12px;
 
-            Flickable {
-                height: 40px;
-                content-width: pills-row.preferred-width;
+            HorizontalLayout {
+                height: 52px;
+                spacing: 10px;
 
-                pills-row := HorizontalLayout {
-                padding-left: 16px;
-                padding-right: 16px;
-                padding-top: 10px;
-                spacing: 8px;
-                alignment: start;
-
-                for cat in root.categories: Rectangle {
-                    height: 28px;
-                    min-width: cat-text.preferred-width + 24px;
-                    horizontal-stretch: 0;
-                    border-radius: 14px;
-                    background: root.selected-category == cat ? #343A50 : #25282F;
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 52px;
+                    border-radius: 8px;
+                    background: root.surface;
+                    border-width: 1px;
+                    border-color: root.border;
 
                     HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        spacing: 10px;
 
-                        cat-text := Text {
-                            text: cat;
-                            font-size: 13px;
-                            vertical-alignment: center;
-                            color: root.selected-category == cat ? #F3F4F6 : #B8BEC9;
-                            overflow: elide;
+                        Image {
+                            source: @image-url("assets/search.svg");
+                            colorize: root.accent;
+                            width: 18px;
+                            height: 18px;
+                            y: (parent.height - self.height) / 2;
                         }
+
+                        search-input := TextInput {
+                            text <=> root.input-text;
+                            font-size: 17px;
+                            color: root.text;
+                            vertical-alignment: center;
+                            key-pressed(event) => {
+                                if event.modifiers.alt && event.text == "1" {
+                                    root.activate-mode(1);
+                                    return accept;
+                                }
+                                if event.modifiers.alt && event.text == "2" {
+                                    root.activate-mode(2);
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                            edited => {
+                                if root.mode == 1 {
+                                    root.search_apps(self.text);
+                                }
+                                if root.mode == 2 {
+                                    root.search_files(self.text);
+                                }
+                            }
+                            accepted => {
+                                if root.mode == 1 && root.apps.length > 0 {
+                                    root.launch-app(root.apps[0]);
+                                } else if root.mode == 2 && root.files.length > 0 {
+                                    root.open-file(root.files[0]);
+                                } else {
+                                    root.run_query(self.text);
+                                }
+                            }
+                        }
+
+if root.input-text == "": Text {
+                        text: root.mode == 1 ? "Search apps..." : root.mode == 2 ? "Search files..." : "Search...";
+                        color: root.text-dim;
+                        font-size: 17px;
+                        vertical-alignment: center;
+                    }
+                    }
+                }
+
+                Rectangle {
+                    width: 52px;
+                    height: 52px;
+                    border-radius: 8px;
+                    background: root.mode == 1 ? root.selected : root.surface;
+                    border-width: 1px;
+                    border-color: root.mode == 1 ? root.accent : root.border;
+
+                    Image {
+                        source: @image-url("assets/layout-grid.svg");
+                        colorize: root.mode == 1 ? root.accent : root.text-dim;
+                        width: 18px;
+                        height: 18px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
                     }
 
                     TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+
                         clicked => {
-                            root.selected-category = root.selected-category == cat ? "" : cat;
-                            root.filter_category(root.selected-category);
+                            root.activate-mode(1);
                         }
                     }
                 }
+
+                Rectangle {
+                    width: 52px;
+                    height: 52px;
+                    border-radius: 8px;
+                    background: root.mode == 2 ? root.selected : root.surface;
+                    border-width: 1px;
+                    border-color: root.mode == 2 ? root.accent : root.border;
+
+                    Image {
+                        source: @image-url("assets/folder.svg");
+                        colorize: root.mode == 2 ? root.accent : root.text-dim;
+                        width: 18px;
+                        height: 18px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+
+                        clicked => {
+                            root.activate-mode(2);
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 52px;
+                    height: 52px;
+                    border-radius: 8px;
+                    background: root.surface;
+                    border-width: 1px;
+                    border-color: root.border;
+
+                    Image {
+                        source: @image-url("assets/zap.svg");
+                        colorize: root.text-dim;
+                        width: 18px;
+                        height: 18px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                Rectangle {
+                    width: 52px;
+                    height: 52px;
+                    border-radius: 8px;
+                    background: root.surface;
+                    border-width: 1px;
+                    border-color: root.border;
+
+                    Image {
+                        source: @image-url("assets/clipboard-pen.svg");
+                        colorize: root.text-dim;
+                        width: 18px;
+                        height: 18px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
                 }
             }
 
-            ScrollView {
-                width: parent.width;
-                height: parent.height;
+            if root.query-result != "": Rectangle {
+                height: 44px;
+                background: root.surface;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: root.border;
 
-                FlexboxLayout {
-                    padding: 16px;
-                    spacing: 12px;
+                Text {
+                    text: root.query-result;
+                    color: root.accent;
+                    font-size: 15px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
 
-                    flex-direction: row;
-                    flex-wrap: wrap;
+            if root.mode == 1: VerticalLayout {
+                height: 350px;
 
-                    for app in root.apps: Rectangle {
-                        width: 90px;
-                        height: 90px;
+                Flickable {
+                    height: 40px;
+                    content-width: pills-row.preferred-width;
 
-                        border-radius: 12px;
+                    pills-row := HorizontalLayout {
+                        padding-left: 2px;
+                        padding-right: 2px;
+                        padding-top: 4px;
+                        spacing: 8px;
+                        alignment: start;
 
-                        background: app-touch.has-hover
-                            ? #2A2E38
-                            : transparent;
+                        for cat in root.categories: Rectangle {
+                            height: 30px;
+                            min-width: cat-text.preferred-width + 22px;
+                            horizontal-stretch: 0;
+                            border-radius: 6px;
+                            background: root.selected-category == cat ? root.selected : root.surface;
+                            border-width: 1px;
+                            border-color: root.selected-category == cat ? root.accent : root.border;
 
-                        place := Rectangle {
-                            width: 50px;
-                            height: 50px;
+                            HorizontalLayout {
+                                padding-left: 11px;
+                                padding-right: 11px;
 
-                            x: (parent.width - self.width) / 2;
-                            y: 6px;
-                            background: #343A50;
-                        }
+                                cat-text := Text {
+                                    text: cat;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                    color: root.selected-category == cat ? root.accent : root.text-dim;
+                                    overflow: elide;
+                                }
+                            }
 
-                        Text {
-                            text: app.name;
-
-                            x: 4px;
-                            y: 62px;
-
-                            width: parent.width - 8px;
-                            height: 20px;
-                            color: #F3F4F6;
-                            font-size: 12px;
-                            horizontal-alignment: center;
-                            overflow: elide;
-                        }
-
-                        Image {
-                            source: app.icon;
-
-                            x: place.x;
-                            y: place.y;
-
-                            width: 50px;
-                            height: 50px;
-
-                            image-fit: contain;
-                        }
-
-                        app-touch := TouchArea {
-                            width: parent.width;
-                            height: parent.height;
-
-                            clicked => {
-                                root.launch-app(app);
+                            TouchArea {
+                                clicked => {
+                                    root.selected-category = root.selected-category == cat ? "" : cat;
+                                    root.filter_category(root.selected-category);
+                                }
                             }
                         }
+                    }
+                }
 
+                ScrollView {
+                    width: parent.width;
+                    height: parent.height;
+
+                    FlexboxLayout {
+                        padding-top: 4px;
+                        spacing: 10px;
+
+                        flex-direction: row;
+                        flex-wrap: wrap;
+
+                        for app in root.apps: Rectangle {
+                            width: 90px;
+                            height: 92px;
+                            border-radius: 8px;
+                            background: app-touch.has-hover ? root.hover : transparent;
+                            border-width: 1px;
+                            border-color: app-touch.has-hover ? root.accent : transparent;
+
+                            place := Rectangle {
+                                width: 48px;
+                                height: 48px;
+                                x: (parent.width - self.width) / 2;
+                                y: 8px;
+                                border-radius: 8px;
+                                background: root.surface;
+                                border-width: 1px;
+                                border-color: root.border;
+                            }
+
+                            Image {
+                                source: app.icon;
+
+                                x: place.x;
+                                y: place.y;
+
+                                width: 48px;
+                                height: 48px;
+                                image-fit: contain;
+                            }
+
+                            Text {
+                                text: app.name;
+                                x: 4px;
+                                y: 62px;
+                                width: parent.width - 8px;
+                                height: 20px;
+                                color: root.text;
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                                overflow: elide;
+                            }
+
+                            app-touch := TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+
+                                clicked => {
+                                    root.launch-app(app);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.mode == 2: VerticalLayout {
+                height: 350px;
+
+                ScrollView {
+                    width: parent.width;
+                    height: parent.height;
+
+                    FlexboxLayout {
+                        padding-top: 4px;
+                        spacing: 10px;
+
+                        flex-direction: row;
+                        flex-wrap: wrap;
+
+                        for file in root.files: Rectangle {
+                            width: 90px;
+                            height: 92px;
+                            border-radius: 8px;
+                            background: file-touch.has-hover ? root.hover : transparent;
+                            border-width: 1px;
+                            border-color: file-touch.has-hover ? root.accent : transparent;
+
+                            Rectangle {
+                                width: 48px;
+                                height: 48px;
+                                x: (parent.width - self.width) / 2;
+                                y: 8px;
+                                border-radius: 8px;
+                                background: root.surface;
+                                border-width: 1px;
+                                border-color: root.border;
+                            }
+
+                            Image {
+                                source: file.is-dir ? @image-url("assets/folder.svg") : @image-url("assets/file.svg");
+                                colorize: root.accent;
+
+                                x: (parent.width - self.width) / 2;
+                                y: 18px;
+
+                                width: 28px;
+                                height: 28px;
+                                image-fit: contain;
+                            }
+
+                            Text {
+                                text: file.name;
+                                x: 4px;
+                                y: 62px;
+                                width: parent.width - 8px;
+                                height: 20px;
+                                color: root.text;
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                                overflow: elide;
+                            }
+
+                            file-touch := TouchArea {
+                                width: parent.width;
+                                height: parent.height;
+
+                                clicked => {
+                                    root.open-file(file);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Footer hint bar, Walker-style
+            Rectangle {
+                height: 30px;
+                border-radius: 6px;
+                background: root.surface;
+                border-width: 1px;
+                border-color: root.border;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+
+                    Text {
+                        text: "Enter: launch  |  Alt+1: apps  |  Alt+2: files  |  Esc: close";
+                        color: root.text-dim;
+                        font-size: 12px;
+                        vertical-alignment: center;
                     }
 
+                    Rectangle { horizontal-stretch: 1; }
+
+                    Text {
+                        text: "Luma";
+                        color: root.accent;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
                 }
             }
             }
-        }
 
         }
     }
@@ -339,13 +503,15 @@ export component LoadingWindow inherits Window {
     background: transparent;
 
     Rectangle {
-        border-radius: 26px;
-        background: #1C1E23;
+        border-radius: 8px;
+        background: #0E120B;
+        border-width: 2px;
+        border-color: #2C3620;
 
         Text {
             text: "Loading...";
-            color: #F3F4F6;
-            font-size: 15px;
+            color: #E4E7D0;
+            font-size: 14px;
             horizontal-alignment: center;
             vertical-alignment: center;
             width: parent.width;

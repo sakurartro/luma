@@ -7,7 +7,11 @@ use backend::apps::db_init::{DbState, db_path};
 use backend::apps::db_service::{get_category_scores, record_launch};
 use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
+use backend::files::db_service as files_db;
+use backend::files::files_search::{self, FileEntry};
+use backend::files::watcher::start_files_watcher;
 use backend::general_features::engine;
+use backend::settings;
 use rusqlite::Connection;
 use slint::VecModel;
 use slint::winit_030::WinitWindowAccessor;
@@ -48,6 +52,14 @@ fn build_items(apps: &[App], cache: &RefCell<HashMap<String, slint::Image>>) -> 
     apps.iter().map(|app| build_item(app, cache)).collect()
 }
 
+fn build_file_item(file: &FileEntry) -> FileItem {
+    FileItem {
+        name: file.name.as_str().into(),
+        path: file.path.as_str().into(),
+        is_dir: file.is_dir,
+    }
+}
+
 // fuzzy name match ∩ selected category; empty category = all
 fn filter_items(
     apps: &[App],
@@ -55,7 +67,7 @@ fn filter_items(
     category: &str,
     cache: &RefCell<HashMap<String, slint::Image>>,
 ) -> Vec<AppItem> {
-    fuzzy::fuzzy_search(apps, query)
+    fuzzy::fuzzy_search(apps, |app| app.app_name.as_str(), query)
         .into_iter()
         .filter(|app| category.is_empty() || app.categories.iter().any(|cat| cat == category))
         .map(|app| build_item(app, cache))
@@ -95,9 +107,10 @@ fn hide_window(window: &MainWindow, visible: &Cell<bool>) {
 }
 
 fn main() -> Result<()> {
-    // --toggle cold start goes to the background hidden; a plain launch shows the window.
+    // Any launch while an instance is live becomes a toggle request instead of
+    // a second daemon.
     let toggle_arg = std::env::args().any(|arg| arg == "--toggle");
-    if toggle_arg && toggle::notify_running() {
+    if toggle::notify_running() {
         return Ok(());
     }
 
@@ -147,9 +160,20 @@ fn main() -> Result<()> {
         let main_window = MainWindow::new()?;
         slint::set_xdg_app_id("luma-rust")?;
 
+        let st = settings::load();
+        main_window.set_bg(settings::parse_color(&st.bg));
+        main_window.set_surface(settings::parse_color(&st.surface));
+        main_window.set_hover(settings::parse_color(&st.hover));
+        main_window.set_selected(settings::parse_color(&st.selected));
+        main_window.set_border(settings::parse_color(&st.border));
+        main_window.set_accent(settings::parse_color(&st.accent));
+        main_window.set_text(settings::parse_color(&st.text));
+        main_window.set_text_dim(settings::parse_color(&st.text_dim));
+
         let weak_window = main_window.as_weak();
         let icon_cache = Rc::new(RefCell::new(HashMap::new()));
         let all_apps: Rc<RefCell<Vec<App>>> = Rc::new(RefCell::new(Vec::new()));
+        let all_files: Rc<RefCell<Vec<FileEntry>>> = Rc::new(RefCell::new(Vec::new()));
 
         main_window.on_show_apps({
             let icon_cache = icon_cache.clone();
@@ -196,6 +220,42 @@ fn main() -> Result<()> {
                         &icon_cache,
                     );
                     window.set_apps(Rc::new(VecModel::from(items)).into());
+                }
+            }
+        });
+        main_window.on_show_files({
+            let all_files = all_files.clone();
+            let weak = main_window.as_weak();
+            move || {
+                if let Some(window) = weak.upgrade() {
+                    // Own connection (same pattern as on_launch_app); mode
+                    // switches are rare.
+                    match Connection::open(db_path()).and_then(|conn| files_db::get_files(&conn)) {
+                        Ok(entries) => {
+                            *all_files.borrow_mut() = entries;
+                            window.set_files(
+                                Rc::new(VecModel::from(
+                                    all_files.borrow().iter().map(build_file_item).collect::<Vec<FileItem>>(),
+                                ))
+                                .into(),
+                            );
+                        }
+                        Err(err) => eprintln!("files refresh error, {err}"),
+                    }
+                }
+            }
+        });
+        main_window.on_search_files({
+            let all_files = all_files.clone();
+            let weak = main_window.as_weak();
+            move |query: slint::SharedString| {
+                if let Some(window) = weak.upgrade() {
+                    let files = all_files.borrow();
+                    let items = fuzzy::fuzzy_search(&files, |file| file.name.as_str(), query.as_str())
+                        .into_iter()
+                        .map(build_file_item)
+                        .collect::<Vec<FileItem>>();
+                    window.set_files(Rc::new(VecModel::from(items)).into());
                 }
             }
         });
@@ -256,6 +316,18 @@ fn main() -> Result<()> {
                     }
                 }
                 Err(err) => eprintln!("failed to open db for launch record: {err}"),
+            }
+        });
+
+        main_window.on_open_file(|file| {
+            if let Err(err) = Command::new("xdg-open")
+                .arg(file.path.as_str())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()
+            {
+                eprintln!("Failed to open {}, {err}", file.path);
             }
         });
 
@@ -325,6 +397,9 @@ fn main() -> Result<()> {
             let apps_obj = Apps::find_apps(&mut db_state.conn, &icons)?;
             start_watcher(icons);
             let _ = apps_obj.apps;
+            let dirs = settings::load().search_dirs;
+            files_search::scan_dirs(&mut db_state.conn, &dirs)?;
+            start_files_watcher(&dirs);
             Ok(db_state)
         })();
         match init {
