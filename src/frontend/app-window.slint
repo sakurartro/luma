@@ -60,7 +60,7 @@ export component MainWindow inherits Window {
     in-out property <string> query-result;
     in-out property <string> input-text;
 
-    // Palette (overridable from settings.json via main.rs)
+// Palette (overridable from settings.json via main.rs)
     in property <color> bg: #0E120B;
     in property <color> surface: #151B10;
     in property <color> hover: #1E2716;
@@ -72,6 +72,8 @@ export component MainWindow inherits Window {
 
     min-width: 760px;
     max-width: 760px;
+    min-height: 420px;
+    max-height: 420px;
     background: transparent;
     default-font-family: "JetBrainsMono Nerd Font";
 
