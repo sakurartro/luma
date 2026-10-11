@@ -6,15 +6,20 @@ pub struct DbState {
     pub conn: Connection,
 }
 
-/// $XDG_CONFIG_HOME/luma/main.sqlite3 (defaults to ~/.config).
-pub fn db_path() -> PathBuf {
+/// $XDG_CONFIG_HOME/luma (defaults to ~/.config).
+pub fn config_dir() -> PathBuf {
     let dir = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => PathBuf::from(std::env::var_os("HOME").expect("HOME not set")).join(".config"),
     };
     let dir = dir.join("luma");
     let _ = std::fs::create_dir_all(&dir);
-    dir.join("main.sqlite3")
+    dir
+}
+
+/// $XDG_CONFIG_HOME/luma/main.sqlite3 (defaults to ~/.config).
+pub fn db_path() -> PathBuf {
+    config_dir().join("main.sqlite3")
 }
 
 impl DbState {

@@ -8,6 +8,7 @@ use backend::apps::db_service::{get_category_scores, record_launch};
 use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
 use backend::general_features::engine;
+use backend::settings;
 use rusqlite::Connection;
 use slint::VecModel;
 use slint::winit_030::WinitWindowAccessor;
@@ -95,9 +96,10 @@ fn hide_window(window: &MainWindow, visible: &Cell<bool>) {
 }
 
 fn main() -> Result<()> {
-    // --toggle cold start goes to the background hidden; a plain launch shows the window.
+    // Any launch while an instance is live becomes a toggle request instead of
+    // a second daemon.
     let toggle_arg = std::env::args().any(|arg| arg == "--toggle");
-    if toggle_arg && toggle::notify_running() {
+    if toggle::notify_running() {
         return Ok(());
     }
 
@@ -146,6 +148,16 @@ fn main() -> Result<()> {
     fn create_ui(mut db_state: DbState) -> Result<UiState> {
         let main_window = MainWindow::new()?;
         slint::set_xdg_app_id("luma-rust")?;
+
+        let st = settings::load();
+        main_window.set_bg(settings::parse_color(&st.bg));
+        main_window.set_surface(settings::parse_color(&st.surface));
+        main_window.set_hover(settings::parse_color(&st.hover));
+        main_window.set_selected(settings::parse_color(&st.selected));
+        main_window.set_border(settings::parse_color(&st.border));
+        main_window.set_accent(settings::parse_color(&st.accent));
+        main_window.set_text(settings::parse_color(&st.text));
+        main_window.set_text_dim(settings::parse_color(&st.text_dim));
 
         let weak_window = main_window.as_weak();
         let icon_cache = Rc::new(RefCell::new(HashMap::new()));
