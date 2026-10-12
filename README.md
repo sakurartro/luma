@@ -1,6 +1,13 @@
+
+<div align="center">
+
+<img src="src/frontend/assets/file_0000000070c0820abb8763205e48e493.png" width="120" alt="Luma logo">
+
 # Luma
 
-Desktop app launcher for Linux (X11/Wayland).
+**A fast, native launcher for Linux**
+
+</div>
 
 ## Install
 
