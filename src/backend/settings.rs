@@ -16,6 +16,13 @@ pub struct Settings {
     pub text_dim: String,
     #[serde(default = "default_search_dirs")]
     pub search_dirs: Vec<String>,
+    // Prefix match on file/folder name; "." hides all dotfiles
+    #[serde(default = "default_hide_patterns")]
+    pub hide_patterns: Vec<String>,
+}
+
+fn default_hide_patterns() -> Vec<String> {
+    vec![".".into()]
 }
 
 fn default_search_dirs() -> Vec<String> {
@@ -38,6 +45,7 @@ impl Default for Settings {
             text: "#E4E7D0".into(),
             text_dim: "#7E8A6C".into(),
             search_dirs: default_search_dirs(),
+            hide_patterns: default_hide_patterns(),
         }
     }
 }

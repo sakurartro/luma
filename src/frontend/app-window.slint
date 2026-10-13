@@ -59,6 +59,8 @@ export component MainWindow inherits Window {
     }
     in-out property <string> query-result;
     in-out property <string> input-text;
+    in-out property <bool> indexing: false;
+    in-out property <int> index-percent: 0;
 
 // Palette (overridable from settings.json via main.rs)
     in property <color> bg: #0E120B;
@@ -72,8 +74,6 @@ export component MainWindow inherits Window {
 
     min-width: 760px;
     max-width: 760px;
-    min-height: 420px;
-    max-height: 420px;
     background: transparent;
     default-font-family: "JetBrainsMono Nerd Font";
 
@@ -277,6 +277,50 @@ if root.input-text == "": Text {
                     font-size: 15px;
                     vertical-alignment: center;
                     horizontal-alignment: center;
+                }
+            }
+
+            if root.indexing: Rectangle {
+                height: 36px;
+                background: root.surface;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: root.border;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 10px;
+
+                    Text {
+                        text: "Indexing files...";
+                        color: root.text-dim;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: root.selected;
+
+                        Rectangle {
+                            width: parent.width * root.index-percent / 100;
+                            height: parent.height;
+                            border-radius: 3px;
+                            background: root.accent;
+                        }
+                    }
+
+                    Text {
+                        text: "\{root.index-percent}%";
+                        color: root.accent;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        min-width: 34px;
+                    }
                 }
             }
 

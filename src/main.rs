@@ -52,11 +52,33 @@ fn build_items(apps: &[App], cache: &RefCell<HashMap<String, slint::Image>>) -> 
     apps.iter().map(|app| build_item(app, cache)).collect()
 }
 
+// Render cap: thousands of slint cards kill layout/memory; results are
+// ranked, the tail is what nobody scrolls to
+const MAX_RENDERED: usize = 200;
+
 fn build_file_item(file: &FileEntry) -> FileItem {
     FileItem {
         name: file.name.as_str().into(),
         path: file.path.as_str().into(),
         is_dir: file.is_dir,
+    }
+}
+
+// Push file-index progress into the UI; called from the 30ms drain timer.
+fn update_index_progress(window: &MainWindow) {
+    let done = files_search::INDEX_DONE.load(Ordering::Relaxed);
+    if window.get_indexing() != !done {
+        window.set_indexing(!done);
+    }
+    let percent = if done {
+        100
+    } else {
+        let total = files_search::INDEX_TOTAL.load(Ordering::Relaxed);
+        let indexed = files_search::INDEXED.load(Ordering::Relaxed);
+        (indexed.min(total) * 100 / total.max(1)) as i32
+    };
+    if window.get_index_percent() != percent {
+        window.set_index_percent(percent);
     }
 }
 
@@ -161,6 +183,7 @@ fn main() -> Result<()> {
         slint::set_xdg_app_id("luma-rust")?;
 
         let st = settings::load();
+        let hide_patterns = st.hide_patterns.clone();
         main_window.set_bg(settings::parse_color(&st.bg));
         main_window.set_surface(settings::parse_color(&st.surface));
         main_window.set_hover(settings::parse_color(&st.hover));
@@ -225,6 +248,7 @@ fn main() -> Result<()> {
         });
         main_window.on_show_files({
             let all_files = all_files.clone();
+            let hide_patterns = hide_patterns.clone();
             let weak = main_window.as_weak();
             move || {
                 if let Some(window) = weak.upgrade() {
@@ -235,7 +259,17 @@ fn main() -> Result<()> {
                             *all_files.borrow_mut() = entries;
                             window.set_files(
                                 Rc::new(VecModel::from(
-                                    all_files.borrow().iter().map(build_file_item).collect::<Vec<FileItem>>(),
+                                    all_files
+                                        .borrow()
+                                        .iter()
+                                        .filter(|f| {
+                                            !hide_patterns
+                                                .iter()
+                                                .any(|p| f.name.starts_with(p.as_str()))
+                                        })
+                                        .map(build_file_item)
+                                        .take(MAX_RENDERED)
+                                        .collect::<Vec<FileItem>>(),
                                 ))
                                 .into(),
                             );
@@ -251,10 +285,12 @@ fn main() -> Result<()> {
             move |query: slint::SharedString| {
                 if let Some(window) = weak.upgrade() {
                     let files = all_files.borrow();
-                    let items = fuzzy::fuzzy_search(&files, |file| file.name.as_str(), query.as_str())
-                        .into_iter()
-                        .map(build_file_item)
-                        .collect::<Vec<FileItem>>();
+                    let items =
+                        fuzzy::fuzzy_search(&files, |file| file.name.as_str(), query.as_str())
+                            .into_iter()
+                            .take(MAX_RENDERED)
+                            .map(build_file_item)
+                            .collect::<Vec<FileItem>>();
                     window.set_files(Rc::new(VecModel::from(items)).into());
                 }
             }
@@ -342,6 +378,7 @@ fn main() -> Result<()> {
         });
 
         show_window(&main_window, &visible);
+        update_index_progress(&main_window);
         Ok(UiState::Live {
             window: main_window,
             visible,
@@ -376,6 +413,7 @@ fn main() -> Result<()> {
                 }
             }
             UiState::Live { window, visible } => {
+                update_index_progress(window);
                 if TOGGLES.swap(0, Ordering::Relaxed) > 0 {
                     if visible.get() {
                         hide_window(window, visible);
@@ -389,7 +427,9 @@ fn main() -> Result<()> {
     }
 
     // Heavy init in the background so the event loop (and the toggle socket)
-    // is up in milliseconds; the drain timer picks up the result.
+    // is up in milliseconds; the drain timer picks up the result. Apps scan
+    // first, then the state is handed to the UI — file indexing keeps going
+    // in the background with progress reported via files_search::INDEX_*.
     std::thread::spawn(|| {
         let init = (|| -> Result<DbState> {
             let icons = Apps::initial_icons_scan()?;
@@ -397,13 +437,26 @@ fn main() -> Result<()> {
             let apps_obj = Apps::find_apps(&mut db_state.conn, &icons)?;
             start_watcher(icons);
             let _ = apps_obj.apps;
-            let dirs = settings::load().search_dirs;
-            files_search::scan_dirs(&mut db_state.conn, &dirs)?;
-            start_files_watcher(&dirs);
             Ok(db_state)
         })();
         match init {
-            Ok(db_state) => *INIT_DB.lock().unwrap() = Some(db_state),
+            Ok(db_state) => {
+                *INIT_DB.lock().unwrap() = Some(db_state);
+
+                // Own connection: db_state.conn already moved to the UI side.
+                let dirs = settings::load().search_dirs;
+                match Connection::open(db_path()) {
+                    Ok(mut conn) => {
+                        let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
+                        if let Err(err) = files_search::scan_dirs(&mut conn, &dirs) {
+                            eprintln!("file scan error: {err}");
+                        }
+                    }
+                    Err(err) => eprintln!("failed to open db for file scan: {err}"),
+                }
+                files_search::INDEX_DONE.store(true, Ordering::Relaxed);
+                start_files_watcher(&dirs);
+            }
             Err(err) => eprintln!("init error: {err}"),
         }
     });
