@@ -1,6 +1,6 @@
 use crate::backend::apps::db_init::db_path;
 use super::db_service::{del_entry, insert_batch};
-use super::files_search::{expand_home, FileEntry};
+use super::files_search::{expand_home, DB_VERSION, FileEntry};
 use notify::{EventKind, RecursiveMode, Watcher};
 use rusqlite::Connection;
 use std::sync::mpsc;
@@ -39,18 +39,27 @@ pub fn start_files_watcher(dirs: &[String]) {
                                     .unwrap_or_default()
                                     .to_string_lossy()
                                     .into_owned(),
+                                name_lower: path
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_lowercase()
+                                    .chars()
+                                    .collect(),
                                 path: path.to_string_lossy().into_owned(),
                                 is_dir: path.is_dir(),
                             };
                             let _ = insert_batch(&[entry], &mut conn);
                         }
                     }
+                    DB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
 
                 EventKind::Remove(_) => {
                     for path in event.paths {
                         let _ = del_entry(&mut conn, path.to_string_lossy().to_string());
                     }
+                    DB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 _ => {}
             }

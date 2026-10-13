@@ -153,10 +153,13 @@ pub fn get_data(conn: &mut Connection) -> rusqlite::Result<Vec<App>> {
         .query_map([], |row| {
             let count: i64 = row.get(5)?;
             let last: i64 = row.get(6)?;
+            let name: String = row.get(1)?;
+            let name_lower = name.to_lowercase().chars().collect();
             Ok((
                 row.get(0)?,
                 App {
-                    app_name: row.get(1)?,
+                    app_name: name,
+                    name_lower,
                     path: row.get(2)?,
                     icon_path: row.get(3)?,
                     command: row.get(4)?,

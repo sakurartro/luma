@@ -89,7 +89,7 @@ fn filter_items(
     category: &str,
     cache: &RefCell<HashMap<String, slint::Image>>,
 ) -> Vec<AppItem> {
-    fuzzy::fuzzy_search(apps, |app| app.app_name.as_str(), query)
+    fuzzy::fuzzy_search(apps, |app| app.name_lower.as_slice(), query)
         .into_iter()
         .filter(|app| category.is_empty() || app.categories.iter().any(|cat| cat == category))
         .map(|app| build_item(app, cache))
@@ -197,6 +197,8 @@ fn main() -> Result<()> {
         let icon_cache = Rc::new(RefCell::new(HashMap::new()));
         let all_apps: Rc<RefCell<Vec<App>>> = Rc::new(RefCell::new(Vec::new()));
         let all_files: Rc<RefCell<Vec<FileEntry>>> = Rc::new(RefCell::new(Vec::new()));
+        // DB_VERSION at the time all_files was loaded; 0 entries force a load
+        let files_db_version: Rc<Cell<usize>> = Rc::new(Cell::new(0));
 
         main_window.on_show_apps({
             let icon_cache = icon_cache.clone();
@@ -248,34 +250,48 @@ fn main() -> Result<()> {
         });
         main_window.on_show_files({
             let all_files = all_files.clone();
+            let files_db_version = files_db_version.clone();
             let hide_patterns = hide_patterns.clone();
             let weak = main_window.as_weak();
             move || {
                 if let Some(window) = weak.upgrade() {
-                    // Own connection (same pattern as on_launch_app); mode
-                    // switches are rare.
-                    match Connection::open(db_path()).and_then(|conn| files_db::get_files(&conn)) {
-                        Ok(entries) => {
-                            *all_files.borrow_mut() = entries;
-                            window.set_files(
-                                Rc::new(VecModel::from(
-                                    all_files
-                                        .borrow()
-                                        .iter()
-                                        .filter(|f| {
-                                            !hide_patterns
-                                                .iter()
-                                                .any(|p| f.name.starts_with(p.as_str()))
-                                        })
-                                        .map(build_file_item)
-                                        .take(MAX_RENDERED)
-                                        .collect::<Vec<FileItem>>(),
-                                ))
-                                .into(),
-                            );
+                    // Reload from the db only when it actually changed since the
+                    // last load (watcher bumps DB_VERSION); otherwise the
+                    // in-memory copy is reused — reading all 180k rows per tab
+                    // open froze the UI for up to a second.
+                    let version = files_search::DB_VERSION.load(Ordering::Relaxed);
+                    if version != files_db_version.get() || all_files.borrow().is_empty() {
+                        // Own connection (same pattern as on_launch_app); mode
+                        // switches are rare.
+                        match Connection::open(db_path())
+                            .and_then(|conn| files_db::get_files(&conn))
+                        {
+                            Ok(entries) => {
+                                *all_files.borrow_mut() = entries;
+                                files_db_version.set(version);
+                            }
+                            Err(err) => {
+                                eprintln!("files refresh error, {err}");
+                                return;
+                            }
                         }
-                        Err(err) => eprintln!("files refresh error, {err}"),
                     }
+                    window.set_files(
+                        Rc::new(VecModel::from(
+                            all_files
+                                .borrow()
+                                .iter()
+                                .filter(|f| {
+                                    !hide_patterns
+                                        .iter()
+                                        .any(|p| f.name.starts_with(p.as_str()))
+                                })
+                                .map(build_file_item)
+                                .take(MAX_RENDERED)
+                                .collect::<Vec<FileItem>>(),
+                        ))
+                        .into(),
+                    );
                 }
             }
         });
@@ -286,7 +302,7 @@ fn main() -> Result<()> {
                 if let Some(window) = weak.upgrade() {
                     let files = all_files.borrow();
                     let items =
-                        fuzzy::fuzzy_search(&files, |file| file.name.as_str(), query.as_str())
+                        fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str())
                             .into_iter()
                             .take(MAX_RENDERED)
                             .map(build_file_item)
@@ -432,10 +448,10 @@ fn main() -> Result<()> {
     // in the background with progress reported via files_search::INDEX_*.
     std::thread::spawn(|| {
         let init = (|| -> Result<DbState> {
-            let icons = Apps::initial_icons_scan()?;
             let mut db_state = DbState::init()?;
+            let icons = Apps::initial_icons_scan(&mut db_state.conn)?;
             let apps_obj = Apps::find_apps(&mut db_state.conn, &icons)?;
-            start_watcher(icons);
+            start_watcher();
             let _ = apps_obj.apps;
             Ok(db_state)
         })();

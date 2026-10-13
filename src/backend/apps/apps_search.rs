@@ -1,6 +1,7 @@
 use super::db_service::{get_data, insert_batch};
 use anyhow::Ok;
 use anyhow::Result;
+use rusqlite::params;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::fs;
@@ -11,6 +12,8 @@ use walkdir::WalkDir;
 #[derive(Debug, Hash)]
 pub struct App {
     pub app_name: String,
+    // lowercase name for fuzzy search, filled where the struct is built
+    pub name_lower: Vec<char>,
     pub path: String,
     pub command: String,
     pub icon_path: String,
@@ -40,7 +43,43 @@ impl Apps {
         Ok(apps)
     }
 
-    pub fn initial_icons_scan() -> anyhow::Result<HashMap<String, PathBuf>> {
+    /// Icon-name → path map, cached in the icons table. The filesystem walk of
+    /// the icon dirs dominates cold start (~0.3 s warm, up to 2 s cold), so it
+    /// runs only once per machine; the watcher refreshes the cache when
+    /// .desktop files change (package install/remove).
+    pub fn initial_icons_scan(conn: &mut Connection) -> anyhow::Result<HashMap<String, PathBuf>> {
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM icons", [], |row| row.get(0))?;
+        if count > 0 {
+            let mut stmt = conn.prepare("SELECT name, path FROM icons")?;
+            let icons = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        PathBuf::from(row.get::<_, String>(1)?),
+                    ))
+                })?
+                .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+            return Ok(icons);
+        }
+        refresh_icons(conn)
+    }
+
+    /// Forced rescan of the icon dirs + persist into the icons table.
+    pub fn refresh_icons(conn: &mut Connection) -> anyhow::Result<HashMap<String, PathBuf>> {
+        let icons = Self::scan_icon_dirs();
+        let tx = conn.transaction()?;
+        {
+            tx.execute("DELETE FROM icons", [])?;
+            let mut stmt = tx.prepare("INSERT OR REPLACE INTO icons (name, path) VALUES (?1, ?2)")?;
+            for (name, path) in &icons {
+                stmt.execute(params![name, path.to_string_lossy()])?;
+            }
+        }
+        tx.commit()?;
+        Ok(icons)
+    }
+
+    fn scan_icon_dirs() -> HashMap<String, PathBuf> {
         let mut icons: HashMap<String, PathBuf> = HashMap::new();
         let home = std::env::var("HOME").unwrap_or_default();
         let roots: Vec<String> = vec![
@@ -56,8 +95,7 @@ impl Apps {
             if !root_path.exists() {
                 continue;
             }
-            for entry_result in WalkDir::new(root) {
-                let entry = entry_result?;
+            for entry in WalkDir::new(root).filter_map(Result::ok) {
                 let path = entry.path();
                 if path.is_file()
                     && let Some(ext) = path.extension()
@@ -75,7 +113,7 @@ impl Apps {
             }
         }
 
-        Ok(icons)
+        icons
     }
 
     pub fn parse_config(
@@ -152,6 +190,7 @@ impl Apps {
             } else {
                 let app = App {
                     app_name: name.unwrap_or("").to_owned(),
+                    name_lower: name.unwrap_or("").to_lowercase().chars().collect(),
                     path: path.to_string_lossy().into_owned(),
                     command: command.unwrap_or_default(),
                     icon_path: icon_path,

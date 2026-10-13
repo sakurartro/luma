@@ -1,8 +1,10 @@
 /// Fuzzy subsequence search: returns items whose names contain all query
-/// characters in order, ranked by match quality.
+/// characters in order, ranked by match quality. `lower` must return the
+/// precomputed lowercase name — recomputing it per item per query dominated
+/// search time (one allocation per name per keystroke).
 pub fn fuzzy_search<'a, T>(
     items: &'a [T],
-    name: impl Fn(&'a T) -> &'a str,
+    lower: impl Fn(&'a T) -> &'a [char],
     query: &str,
 ) -> Vec<&'a T> {
     if query.is_empty() {
@@ -13,8 +15,7 @@ pub fn fuzzy_search<'a, T>(
     let mut scored: Vec<(&T, i32)> = Vec::new();
 
     for item in items {
-        let name_lower: Vec<char> = name(item).to_lowercase().chars().collect();
-        if let Some(score) = score_match(&name_lower, &query_lower) {
+        if let Some(score) = score_match(lower(item), &query_lower) {
             scored.push((item, score));
         }
     }
