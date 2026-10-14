@@ -1,5 +1,4 @@
 use super::db_service::{get_data, insert_batch};
-use anyhow::Ok;
 use anyhow::Result;
 use rusqlite::params;
 use rusqlite::Connection;
@@ -61,7 +60,7 @@ impl Apps {
                 .collect::<rusqlite::Result<HashMap<_, _>>>()?;
             return Ok(icons);
         }
-        refresh_icons(conn)
+        Self::refresh_icons(conn)
     }
 
     /// Forced rescan of the icon dirs + persist into the icons table.
@@ -95,7 +94,7 @@ impl Apps {
             if !root_path.exists() {
                 continue;
             }
-            for entry in WalkDir::new(root).filter_map(Result::ok) {
+            for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
                 let path = entry.path();
                 if path.is_file()
                     && let Some(ext) = path.extension()
