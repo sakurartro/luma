@@ -1,5 +1,6 @@
 use anyhow::Result;
 use rusqlite::Connection;
+
 use std::path::PathBuf;
 
 pub struct DbState {
@@ -22,9 +23,20 @@ pub fn db_path() -> PathBuf {
     config_dir().join("main.sqlite3")
 }
 
+// All connections to the db go through this: WAL (set persistently in
+// DbState::init) stops readers/writers blocking each other during the file
+// scan; busy_timeout + synchronous=NORMAL keep UI-thread queries responsive.
+pub fn open_conn() -> Result<Connection> {
+    let conn = Connection::open(db_path())?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(conn)
+}
+
 impl DbState {
     pub fn init() -> Result<Self> {
         let conn = Connection::open(db_path())?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
 
         conn.execute_batch(
             r#"

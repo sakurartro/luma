@@ -1,7 +1,7 @@
 use super::apps_search::Apps;
+use super::db_init::open_conn;
 use super::db_service::del_app;
 use notify::{EventKind, RecursiveMode, Watcher};
-use rusqlite::Connection;
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
@@ -13,8 +13,7 @@ const REFRESH_DEBOUNCE: Duration = Duration::from_secs(2);
 
 pub fn start_watcher() {
     thread::spawn(move || {
-        let mut conn =
-            Connection::open(super::db_init::db_path()).expect("Failed to init db conn by watcher");
+        let mut conn = open_conn().expect("Failed to init db conn by watcher");
         let (tx, rx) = mpsc::channel();
         let mut watcher = notify::recommended_watcher(tx).expect("failed to create watcher");
 

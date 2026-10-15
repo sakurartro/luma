@@ -84,7 +84,7 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
                 path: path.to_string_lossy().into_owned(),
                 is_dir: path.is_dir(),
             });
-            if batch.len() == 100 {
+            if batch.len() == 5000 {
                 insert_batch(&batch, conn)?;
                 INDEXED.fetch_add(batch.len(), Ordering::Relaxed);
                 batch.clear();

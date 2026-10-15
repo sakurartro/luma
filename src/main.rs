@@ -3,7 +3,7 @@ mod backend;
 mod toggle;
 use anyhow::Result;
 use backend::apps::apps_search::{App, Apps};
-use backend::apps::db_init::{DbState, db_path};
+use backend::apps::db_init::{DbState, open_conn};
 use backend::apps::db_service::{get_category_scores, record_launch, set_pinned};
 use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
@@ -12,7 +12,6 @@ use backend::files::files_search::{self, FileEntry};
 use backend::files::watcher::start_files_watcher;
 use backend::general_features::engine;
 use backend::settings;
-use rusqlite::Connection;
 use slint::VecModel;
 use slint::winit_030::WinitWindowAccessor;
 use std::cell::{Cell, RefCell};
@@ -68,7 +67,7 @@ fn load_files_if_stale(all_files: &RefCell<Vec<FileEntry>>, files_db_version: &C
         return;
     }
     // Own connection (same pattern as on_launch_app); reloads are rare.
-    match Connection::open(db_path()).and_then(|conn| files_db::get_files(&conn)) {
+    match open_conn().and_then(|conn| files_db::get_files(&conn).map_err(anyhow::Error::from)) {
         Ok(entries) => {
             *all_files.borrow_mut() = entries;
             files_db_version.set(version);
@@ -328,7 +327,7 @@ fn main() -> Result<()> {
                     // First unified search lazy-loads the app list (own
                     // connection, same pattern as on_launch_app).
                     if all_apps.borrow().is_empty() {
-                        match Connection::open(db_path()) {
+                        match open_conn() {
                             Ok(mut conn) => match Apps::refresh(&mut conn) {
                                 Ok(apps_refresh_obj) => {
                                     *all_apps.borrow_mut() = apps_refresh_obj.apps;
@@ -412,7 +411,7 @@ fn main() -> Result<()> {
             }
 
             // Own connection (same pattern as watcher.rs); launches are rare.
-            match Connection::open(db_path()) {
+            match open_conn() {
                 Ok(mut conn) => {
                     if let Err(err) = record_launch(&mut conn, &app.path) {
                         eprintln!("failed to record launch of {program}: {err}");
@@ -427,7 +426,7 @@ fn main() -> Result<()> {
             let all_apps = all_apps.clone();
             let weak = main_window.as_weak();
             move |app: AppItem| {
-                let pinned = match Connection::open(db_path()) {
+                let pinned = match open_conn() {
                     Ok(mut conn) => match set_pinned(&mut conn, app.path.as_str()) {
                         Ok(pinned) => pinned,
                         Err(err) => {
@@ -561,9 +560,8 @@ fn main() -> Result<()> {
 
                 // Own connection: db_state.conn already moved to the UI side.
                 let dirs = settings::load().search_dirs;
-                match Connection::open(db_path()) {
+                match open_conn() {
                     Ok(mut conn) => {
-                        let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
                         if let Err(err) = files_search::scan_dirs(&mut conn, &dirs) {
                             eprintln!("file scan error: {err}");
                         }
