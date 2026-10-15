@@ -60,10 +60,21 @@ const MAX_RENDERED: usize = 200;
 const MAX_MIXED: usize = 20;
 
 // Reload the in-memory file index when the watcher bumped DB_VERSION; keeps
-// per-call cost off repeated searches.
-fn load_files_if_stale(all_files: &RefCell<Vec<FileEntry>>, files_db_version: &Cell<usize>) {
+// per-call cost off repeated searches. Reloads are throttled: the files
+// watcher bumps DB_VERSION on every fs event, and reading all 180k rows on
+// the UI thread froze the UI for up to two seconds per keystroke.
+const FILES_RELOAD_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn load_files_if_stale(
+    all_files: &RefCell<Vec<FileEntry>>,
+    files_db_version: &Cell<usize>,
+    last_load: &Cell<Option<std::time::Instant>>,
+) {
     let version = files_search::DB_VERSION.load(Ordering::Relaxed);
     if version == files_db_version.get() && !all_files.borrow().is_empty() {
+        return;
+    }
+    if last_load.get().is_some_and(|t| t.elapsed() < FILES_RELOAD_MIN_INTERVAL) {
         return;
     }
     // Own connection (same pattern as on_launch_app); reloads are rare.
@@ -71,6 +82,7 @@ fn load_files_if_stale(all_files: &RefCell<Vec<FileEntry>>, files_db_version: &C
         Ok(entries) => {
             *all_files.borrow_mut() = entries;
             files_db_version.set(version);
+            last_load.set(Some(std::time::Instant::now()));
         }
         Err(err) => eprintln!("files refresh error, {err}"),
     }
@@ -219,6 +231,8 @@ fn main() -> Result<()> {
         let all_files: Rc<RefCell<Vec<FileEntry>>> = Rc::new(RefCell::new(Vec::new()));
         // DB_VERSION at the time all_files was loaded; 0 entries force a load
         let files_db_version: Rc<Cell<usize>> = Rc::new(Cell::new(0));
+        // Throttle clock for the stale reload above
+        let last_files_load: Rc<Cell<Option<std::time::Instant>>> = Rc::new(Cell::new(None));
 
         main_window.on_show_apps({
             let icon_cache = icon_cache.clone();
@@ -271,6 +285,7 @@ fn main() -> Result<()> {
         main_window.on_show_files({
             let all_files = all_files.clone();
             let files_db_version = files_db_version.clone();
+            let last_files_load = last_files_load.clone();
             let hide_patterns = hide_patterns.clone();
             let weak = main_window.as_weak();
             move || {
@@ -279,7 +294,7 @@ fn main() -> Result<()> {
                     // last load (watcher bumps DB_VERSION); otherwise the
                     // in-memory copy is reused — reading all 180k rows per tab
                     // open froze the UI for up to a second.
-                    load_files_if_stale(&all_files, &files_db_version);
+                    load_files_if_stale(&all_files, &files_db_version, &last_files_load);
                     window.set_files(
                         Rc::new(VecModel::from(
                             all_files
@@ -320,6 +335,7 @@ fn main() -> Result<()> {
             let all_apps = all_apps.clone();
             let all_files = all_files.clone();
             let files_db_version = files_db_version.clone();
+            let last_files_load = last_files_load.clone();
             let hide_patterns = hide_patterns.clone();
             let weak = main_window.as_weak();
             move |query: slint::SharedString| {
@@ -337,7 +353,7 @@ fn main() -> Result<()> {
                             Err(err) => eprintln!("failed to open db for apps refresh: {err}"),
                         }
                     }
-                    load_files_if_stale(&all_files, &files_db_version);
+                    load_files_if_stale(&all_files, &files_db_version, &last_files_load);
                     let apps = all_apps.borrow();
                     let app_items = filter_items(&apps, query.as_str(), "", &icon_cache)
                         .into_iter()
