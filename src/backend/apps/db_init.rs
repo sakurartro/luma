@@ -74,16 +74,24 @@ impl DbState {
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                path TEXT NOT NULL UNIQUE
+                path TEXT NOT NULL UNIQUE,
+                mtime INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS folders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                path TEXT NOT NULL UNIQUE
+                path TEXT NOT NULL UNIQUE,
+                mtime INTEGER NOT NULL DEFAULT 0
             );
             "#,
         )?;
+
+        // Migration for dbs created before the mtime column; the next scan
+        // refills these tables from scratch anyway.
+        for table in ["files", "folders"] {
+            let _ = conn.execute(&format!("ALTER TABLE {table} ADD COLUMN mtime INTEGER NOT NULL DEFAULT 0"), []);
+        }
 
         Ok(Self { conn })
     }

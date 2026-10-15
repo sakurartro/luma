@@ -96,6 +96,36 @@ fn build_file_item(file: &FileEntry) -> FileItem {
     }
 }
 
+// Filtered + sorted files tab content. Sort modes: 0 = name (the order
+// get_files returns), 1 = newest first, 2 = oldest first; folders stay in
+// front in every mode.
+fn files_view(files: &[FileEntry], hide_patterns: &[String], sort: i32) -> Vec<FileItem> {
+    let mut filtered: Vec<&FileEntry> = files
+        .iter()
+        .filter(|f| !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str())))
+        .collect();
+    match sort {
+        1 => filtered.sort_by(|a, b| {
+            b.is_dir
+                .cmp(&a.is_dir)
+                .then_with(|| b.mtime.cmp(&a.mtime))
+                .then_with(|| b.name_lower.cmp(&a.name_lower))
+        }),
+        2 => filtered.sort_by(|a, b| {
+            b.is_dir
+                .cmp(&a.is_dir)
+                .then_with(|| a.mtime.cmp(&b.mtime))
+                .then_with(|| a.name_lower.cmp(&b.name_lower))
+        }),
+        _ => {}
+    }
+    filtered
+        .into_iter()
+        .take(MAX_RENDERED)
+        .map(build_file_item)
+        .collect()
+}
+
 // Push file-index progress into the UI; called from the 30ms drain timer.
 fn update_index_progress(window: &MainWindow) {
     let done = files_search::INDEX_DONE.load(Ordering::Relaxed);
@@ -296,19 +326,11 @@ fn main() -> Result<()> {
                     // open froze the UI for up to a second.
                     load_files_if_stale(&all_files, &files_db_version, &last_files_load);
                     window.set_files(
-                        Rc::new(VecModel::from(
-                            all_files
-                                .borrow()
-                                .iter()
-                                .filter(|f| {
-                                    !hide_patterns
-                                        .iter()
-                                        .any(|p| f.name.starts_with(p.as_str()))
-                                })
-                                .map(build_file_item)
-                                .take(MAX_RENDERED)
-                                .collect::<Vec<FileItem>>(),
-                        ))
+                        Rc::new(VecModel::from(files_view(
+                            &all_files.borrow(),
+                            &hide_patterns,
+                            window.get_files_sort(),
+                        )))
                         .into(),
                     );
                 }

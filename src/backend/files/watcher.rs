@@ -1,6 +1,6 @@
 use crate::backend::apps::db_init::open_conn;
 use super::db_service::{del_entry, insert_batch};
-use super::files_search::{expand_home, DB_VERSION, FileEntry};
+use super::files_search::{expand_home, mtime_of, DB_VERSION, FileEntry};
 use notify::{EventKind, RecursiveMode, Watcher};
 use std::sync::mpsc;
 use std::thread;
@@ -46,6 +46,7 @@ pub fn start_files_watcher(dirs: &[String]) {
                                     .collect(),
                                 path: path.to_string_lossy().into_owned(),
                                 is_dir: path.is_dir(),
+                                mtime: mtime_of(&path),
                             };
                             let _ = insert_batch(&[entry], &mut conn);
                         }

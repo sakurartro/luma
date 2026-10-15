@@ -23,6 +23,8 @@ export component MainWindow inherits Window {
     in-out property <string> selected-category;
     // 0 = closed, 1 = apps, 2 = files
     in-out property <int> mode: 0;
+    // files tab sort: 0 = name, 1 = newest, 2 = oldest
+    in-out property <int> files-sort: 0;
     callback show_apps();
     callback show_files();
     callback launch_app(AppItem);
@@ -470,6 +472,48 @@ if root.input-text == "": Text {
 
             if root.mode == 2: VerticalLayout {
                 height: 350px;
+
+                Flickable {
+                    height: 40px;
+                    content-width: sort-row.preferred-width;
+
+                    sort-row := HorizontalLayout {
+                        padding-left: 2px;
+                        padding-right: 2px;
+                        padding-top: 4px;
+                        spacing: 8px;
+                        alignment: start;
+
+                        for sort-option[i] in ["Name", "Newest", "Oldest"]: Rectangle {
+                            height: 30px;
+                            min-width: sort-text.preferred-width + 22px;
+                            horizontal-stretch: 0;
+                            border-radius: 6px;
+                            background: root.files-sort == i ? root.selected : root.surface;
+                            border-width: 1px;
+                            border-color: root.files-sort == i ? root.accent : root.border;
+
+                            HorizontalLayout {
+                                padding-left: 11px;
+                                padding-right: 11px;
+
+                                sort-text := Text {
+                                    text: sort-option;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                    color: root.files-sort == i ? root.accent : root.text-dim;
+                                }
+                            }
+
+                            TouchArea {
+                                clicked => {
+                                    root.files-sort = i;
+                                    root.show_files();
+                                }
+                            }
+                        }
+                    }
+                }
 
                 ScrollView {
                     width: parent.width;
