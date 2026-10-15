@@ -20,6 +20,7 @@ pub struct App {
     pub time_launched: i64,
     pub last_launched: i64,
     pub score: i64,
+    pub pinned: bool,
 }
 
 pub struct Apps {
@@ -197,6 +198,7 @@ impl Apps {
                     time_launched: 0,
                     last_launched: 0,
                     score: 0,
+                    pinned: false,
                 };
                 apps.push(app);
             }

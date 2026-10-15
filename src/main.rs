@@ -4,7 +4,7 @@ mod toggle;
 use anyhow::Result;
 use backend::apps::apps_search::{App, Apps};
 use backend::apps::db_init::{DbState, db_path};
-use backend::apps::db_service::{get_category_scores, record_launch};
+use backend::apps::db_service::{get_category_scores, record_launch, set_pinned};
 use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
 use backend::files::db_service as files_db;
@@ -45,6 +45,7 @@ fn build_item(app: &App, cache: &RefCell<HashMap<String, slint::Image>>) -> AppI
         path: app.path.as_str().into(),
         command: app.command.as_str().into(),
         icon,
+        pinned: app.pinned,
     }
 }
 
@@ -418,6 +419,55 @@ fn main() -> Result<()> {
                     }
                 }
                 Err(err) => eprintln!("failed to open db for launch record: {err}"),
+            }
+        });
+
+        main_window.on_toggle_pin({
+            let icon_cache = icon_cache.clone();
+            let all_apps = all_apps.clone();
+            let weak = main_window.as_weak();
+            move |app: AppItem| {
+                let pinned = match Connection::open(db_path()) {
+                    Ok(mut conn) => match set_pinned(&mut conn, app.path.as_str()) {
+                        Ok(pinned) => pinned,
+                        Err(err) => {
+                            eprintln!("failed to toggle pin of {}: {err}", app.path);
+                            return;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("failed to open db for pin toggle: {err}");
+                        return;
+                    }
+                };
+
+                // Keep the in-memory copy in sync and re-sort, same ordering
+                // as get_data (pinned first, then score).
+                {
+                    let mut apps = all_apps.borrow_mut();
+                    for a in apps.iter_mut() {
+                        if a.path == app.path.as_str() {
+                            a.pinned = pinned;
+                        }
+                    }
+                    apps.sort_by(|a, b| {
+                        b.pinned
+                            .cmp(&a.pinned)
+                            .then_with(|| b.score.cmp(&a.score))
+                    });
+                }
+
+                // Re-render the apps view with the current query/category.
+                if let Some(window) = weak.upgrade() {
+                    let apps = all_apps.borrow();
+                    let items = filter_items(
+                        &apps,
+                        window.get_input_text().as_str(),
+                        window.get_selected_category().as_str(),
+                        &icon_cache,
+                    );
+                    window.set_apps(Rc::new(VecModel::from(items)).into());
+                }
             }
         });
 

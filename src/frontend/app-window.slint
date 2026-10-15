@@ -7,6 +7,7 @@ export struct AppItem {
     path: string,
     command: string,
     icon: image,
+    pinned: bool,
 }
 
 export struct FileItem {
@@ -25,6 +26,7 @@ export component MainWindow inherits Window {
     callback show_apps();
     callback show_files();
     callback launch_app(AppItem);
+    callback toggle-pin(AppItem);
     callback open_file(FileItem);
     callback search_apps(query: string);
     callback search_files(query: string);
@@ -438,12 +440,27 @@ if root.input-text == "": Text {
                                 overflow: elide;
                             }
 
+                            if app.pinned: Rectangle {
+                                width: 7px;
+                                height: 7px;
+                                border-radius: 3.5px;
+                                background: root.accent;
+                                x: parent.width - 13px;
+                                y: 8px;
+                            }
+
                             app-touch := TouchArea {
                                 width: parent.width;
                                 height: parent.height;
 
                                 clicked => {
                                     root.launch-app(app);
+                                }
+
+                                pointer-event(e) => {
+                                    if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                                        root.toggle-pin(app);
+                                    }
                                 }
                             }
                         }

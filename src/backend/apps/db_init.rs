@@ -37,7 +37,8 @@ impl DbState {
                 icon_path TEXT,
                 command TEXT,
                 times_launched INTEGER NOT NULL DEFAULT 0,
-                last_launched INTEGER
+                last_launched INTEGER,
+                pinned INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS application_categories (
