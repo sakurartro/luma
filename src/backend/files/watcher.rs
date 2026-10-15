@@ -19,6 +19,21 @@ pub fn start_files_watcher(dirs: &[String]) {
             }
         }
 
+        fn upsert(path: &std::path::Path, conn: &mut rusqlite::Connection) {
+            if !(path.is_dir() || path.is_file()) {
+                return;
+            }
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let entry = FileEntry {
+                name_lower: name.to_lowercase().chars().collect(),
+                name: name.into_owned(),
+                path: path.to_string_lossy().into_owned(),
+                is_dir: path.is_dir(),
+                mtime: mtime_of(path),
+            };
+            let _ = insert_batch(&[entry], conn);
+        }
+
         for event in rx {
             let Ok(event) = event else {
                 continue;
@@ -27,29 +42,22 @@ pub fn start_files_watcher(dirs: &[String]) {
             match event.kind {
                 EventKind::Create(_) => {
                     for path in event.paths {
-                        if path.is_dir() || path.is_file() {
-                            // shortcut: contents of a moved-in tree stay unindexed
-                            // until the next startup rescan; inotify only sees
-                            // the moved dir itself
-                            let entry = FileEntry {
-                                name: path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .into_owned(),
-                                name_lower: path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_lowercase()
-                                    .chars()
-                                    .collect(),
-                                path: path.to_string_lossy().into_owned(),
-                                is_dir: path.is_dir(),
-                                mtime: mtime_of(&path),
-                            };
-                            let _ = insert_batch(&[entry], &mut conn);
-                        }
+                        // shortcut: contents of a moved-in tree stay unindexed
+                        // until the next startup rescan; inotify only sees
+                        // the moved dir itself
+                        upsert(&path, &mut conn);
+                    }
+                    DB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+
+                // Rename/content change: drop the old rows, re-index what still
+                // exists with a fresh mtime. Rename events carry both paths.
+                EventKind::Modify(_) => {
+                    for path in &event.paths {
+                        let _ = del_entry(&mut conn, path.to_string_lossy().to_string());
+                    }
+                    for path in &event.paths {
+                        upsert(path, &mut conn);
                     }
                     DB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }

@@ -17,11 +17,25 @@ pub fn general_engine(input: String) -> Result<String> {
         let output = format!("{amount}{from} is {rate:.2}{to}");
         return Ok(output);
     }
-    let calc_re = Regex::new(r"(\d+)\s*([+-/*])\s(\d+)").unwrap();
+    let calc_re = Regex::new(r"(\d+)\s*([+-/*])\s*(\d+)").unwrap();
     if let Some(_caps) = calc_re.captures(&input) {
         let ans = calc(&input)?;
         return Ok(ans);
     }
 
     Ok("".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calc_without_spaces() {
+        assert_eq!(general_engine("2+2".into()).unwrap(), "4");
+        assert_eq!(general_engine("10/5".into()).unwrap(), "2");
+        assert_eq!(general_engine("2 + 2".into()).unwrap(), "4");
+        // non-math input stays empty
+        assert_eq!(general_engine("hello".into()).unwrap(), "");
+    }
 }

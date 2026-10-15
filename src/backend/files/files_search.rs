@@ -77,7 +77,8 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
             continue;
         }
         for entry_result in WalkDir::new(&root) {
-            let entry = entry_result?;
+            // skip unreadable/vanished paths instead of aborting the whole scan
+            let Some(entry) = entry_result.ok() else { continue };
             if entry.depth() == 0 {
                 continue;
             }

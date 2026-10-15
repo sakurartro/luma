@@ -7,11 +7,13 @@ pub struct DbState {
     pub conn: Connection,
 }
 
-/// $XDG_CONFIG_HOME/luma (defaults to ~/.config).
+/// $XDG_CONFIG_HOME/luma (defaults to ~/.config, /tmp without HOME).
 pub fn config_dir() -> PathBuf {
     let dir = match std::env::var_os("XDG_CONFIG_HOME") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => PathBuf::from(std::env::var_os("HOME").expect("HOME not set")).join(".config"),
+        _ => std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join(".config"))
+            .unwrap_or_else(std::env::temp_dir),
     };
     let dir = dir.join("luma");
     let _ = std::fs::create_dir_all(&dir);
@@ -26,10 +28,13 @@ pub fn db_path() -> PathBuf {
 // All connections to the db go through this: WAL (set persistently in
 // DbState::init) stops readers/writers blocking each other during the file
 // scan; busy_timeout + synchronous=NORMAL keep UI-thread queries responsive.
+// foreign_keys is per-connection, so it must be set here — not just in init —
+// or deletes through watcher connections would skip the CASCADE.
 pub fn open_conn() -> Result<Connection> {
     let conn = Connection::open(db_path())?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
     Ok(conn)
 }
 
@@ -92,6 +97,13 @@ impl DbState {
         for table in ["files", "folders"] {
             let _ = conn.execute(&format!("ALTER TABLE {table} ADD COLUMN mtime INTEGER NOT NULL DEFAULT 0"), []);
         }
+
+        // Cleanup of categories orphaned by connections that ran without
+        // foreign_keys (see open_conn).
+        conn.execute(
+            "DELETE FROM application_categories WHERE application_id NOT IN (SELECT id FROM applications)",
+            [],
+        )?;
 
         Ok(Self { conn })
     }

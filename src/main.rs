@@ -205,7 +205,12 @@ fn main() -> Result<()> {
 
     // Bind the toggle socket before anything heavy: keybinds pressed while we
     // initialize then reach us instead of spawning duplicate instances.
-    let listener = toggle::bind_socket();
+    let listener = match toggle::bind_socket() {
+        Some(listener) => listener,
+        // A live instance appeared between notify_running() and the bind; it
+        // owns the socket, so we step aside.
+        None => return Ok(()),
+    };
 
     // Open right away unless we were started by the service (systemd sets
     // LUMA_SERVICE=1 in the unit): a keybind spawn that didn't find a running
@@ -245,9 +250,16 @@ fn main() -> Result<()> {
         LOADING.with_borrow_mut(|slot| *slot = Some(l));
     }
 
-    fn create_ui(mut db_state: DbState) -> Result<UiState> {
-        let main_window = MainWindow::new()?;
-        slint::set_xdg_app_id("luma-rust")?;
+    // On failure db_state comes back so the next toggle can retry the whole
+    // init instead of dropping the connection for good.
+    fn create_ui(mut db_state: DbState) -> Result<UiState, (anyhow::Error, DbState)> {
+        let main_window = match MainWindow::new() {
+            Ok(window) => window,
+            Err(err) => return Err((anyhow::Error::from(err), db_state)),
+        };
+        if let Err(err) = slint::set_xdg_app_id("luma-rust") {
+            return Err((anyhow::Error::from(err), db_state));
+        }
 
         let st = settings::load();
         let hide_patterns = st.hide_patterns.clone();
@@ -567,7 +579,12 @@ fn main() -> Result<()> {
                                     }
                                 });
                             }
-                            Err(err) => eprintln!("failed to create window: {err}"),
+                            // Keep the db_state for a retry on the next toggle;
+                            // the Loading pill stays up as the retry indicator.
+                            Err((err, db_state)) => {
+                                eprintln!("failed to create window: {err}");
+                                *s = UiState::Fresh { db_state };
+                            }
                         }
                     }
                 }
