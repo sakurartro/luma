@@ -22,6 +22,8 @@ pub struct FileEntry {
     pub name_lower: Vec<char>,
     pub path: String,
     pub is_dir: bool,
+    // unix seconds of the modification time; 0 when unavailable
+    pub mtime: i64,
 }
 
 /// "~/" at the start (or bare "~") expands to $HOME; anything else stays as-is.
@@ -34,6 +36,14 @@ pub fn expand_home(dir: &str) -> PathBuf {
         Some(rest) => home.join(rest),
         None => home,
     }
+}
+
+// Unix seconds of the path's modification time; 0 when it can't be read.
+pub fn mtime_of(path: &std::path::Path) -> i64 {
+    path.metadata()
+        .and_then(|m| m.modified())
+        .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0))
+        .unwrap_or(0)
 }
 
 // Wipe + full rescan: files carry no stats, so there is nothing to lose.
@@ -67,7 +77,8 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
             continue;
         }
         for entry_result in WalkDir::new(&root) {
-            let entry = entry_result?;
+            // skip unreadable/vanished paths instead of aborting the whole scan
+            let Some(entry) = entry_result.ok() else { continue };
             if entry.depth() == 0 {
                 continue;
             }
@@ -83,6 +94,7 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
                 name_lower,
                 path: path.to_string_lossy().into_owned(),
                 is_dir: path.is_dir(),
+                mtime: mtime_of(path),
             });
             if batch.len() == 5000 {
                 insert_batch(&batch, conn)?;
@@ -117,8 +129,8 @@ mod tests {
 
         let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE files (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE);
-             CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE);",
+            "CREATE TABLE files (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, mtime INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, mtime INTEGER NOT NULL DEFAULT 0);",
         )
         .unwrap();
 

@@ -60,10 +60,21 @@ const MAX_RENDERED: usize = 200;
 const MAX_MIXED: usize = 20;
 
 // Reload the in-memory file index when the watcher bumped DB_VERSION; keeps
-// per-call cost off repeated searches.
-fn load_files_if_stale(all_files: &RefCell<Vec<FileEntry>>, files_db_version: &Cell<usize>) {
+// per-call cost off repeated searches. Reloads are throttled: the files
+// watcher bumps DB_VERSION on every fs event, and reading all 180k rows on
+// the UI thread froze the UI for up to two seconds per keystroke.
+const FILES_RELOAD_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn load_files_if_stale(
+    all_files: &RefCell<Vec<FileEntry>>,
+    files_db_version: &Cell<usize>,
+    last_load: &Cell<Option<std::time::Instant>>,
+) {
     let version = files_search::DB_VERSION.load(Ordering::Relaxed);
     if version == files_db_version.get() && !all_files.borrow().is_empty() {
+        return;
+    }
+    if last_load.get().is_some_and(|t| t.elapsed() < FILES_RELOAD_MIN_INTERVAL) {
         return;
     }
     // Own connection (same pattern as on_launch_app); reloads are rare.
@@ -71,6 +82,7 @@ fn load_files_if_stale(all_files: &RefCell<Vec<FileEntry>>, files_db_version: &C
         Ok(entries) => {
             *all_files.borrow_mut() = entries;
             files_db_version.set(version);
+            last_load.set(Some(std::time::Instant::now()));
         }
         Err(err) => eprintln!("files refresh error, {err}"),
     }
@@ -82,6 +94,41 @@ fn build_file_item(file: &FileEntry) -> FileItem {
         path: file.path.as_str().into(),
         is_dir: file.is_dir,
     }
+}
+
+// Folders stay in front in every sort mode; ties broken by name.
+// Sort modes: 1 = newest first, 2 = oldest first, 0 = untouched.
+fn sort_entries(entries: &mut [&FileEntry], sort: i32) {
+    match sort {
+        1 => entries.sort_by(|a, b| {
+            b.is_dir
+                .cmp(&a.is_dir)
+                .then_with(|| b.mtime.cmp(&a.mtime))
+                .then_with(|| b.name_lower.cmp(&a.name_lower))
+        }),
+        2 => entries.sort_by(|a, b| {
+            b.is_dir
+                .cmp(&a.is_dir)
+                .then_with(|| a.mtime.cmp(&b.mtime))
+                .then_with(|| a.name_lower.cmp(&b.name_lower))
+        }),
+        _ => {}
+    }
+}
+
+// Filtered + sorted files tab content. Sort modes: 0 = name (the order
+// get_files returns), 1 = newest first, 2 = oldest first.
+fn files_view(files: &[FileEntry], hide_patterns: &[String], sort: i32) -> Vec<FileItem> {
+    let mut filtered: Vec<&FileEntry> = files
+        .iter()
+        .filter(|f| !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str())))
+        .collect();
+    sort_entries(&mut filtered, sort);
+    filtered
+        .into_iter()
+        .take(MAX_RENDERED)
+        .map(build_file_item)
+        .collect()
 }
 
 // Push file-index progress into the UI; called from the 30ms drain timer.
@@ -158,7 +205,12 @@ fn main() -> Result<()> {
 
     // Bind the toggle socket before anything heavy: keybinds pressed while we
     // initialize then reach us instead of spawning duplicate instances.
-    let listener = toggle::bind_socket();
+    let listener = match toggle::bind_socket() {
+        Some(listener) => listener,
+        // A live instance appeared between notify_running() and the bind; it
+        // owns the socket, so we step aside.
+        None => return Ok(()),
+    };
 
     // Open right away unless we were started by the service (systemd sets
     // LUMA_SERVICE=1 in the unit): a keybind spawn that didn't find a running
@@ -198,9 +250,16 @@ fn main() -> Result<()> {
         LOADING.with_borrow_mut(|slot| *slot = Some(l));
     }
 
-    fn create_ui(mut db_state: DbState) -> Result<UiState> {
-        let main_window = MainWindow::new()?;
-        slint::set_xdg_app_id("luma-rust")?;
+    // On failure db_state comes back so the next toggle can retry the whole
+    // init instead of dropping the connection for good.
+    fn create_ui(mut db_state: DbState) -> Result<UiState, (anyhow::Error, DbState)> {
+        let main_window = match MainWindow::new() {
+            Ok(window) => window,
+            Err(err) => return Err((anyhow::Error::from(err), db_state)),
+        };
+        if let Err(err) = slint::set_xdg_app_id("luma-rust") {
+            return Err((anyhow::Error::from(err), db_state));
+        }
 
         let st = settings::load();
         let hide_patterns = st.hide_patterns.clone();
@@ -219,6 +278,8 @@ fn main() -> Result<()> {
         let all_files: Rc<RefCell<Vec<FileEntry>>> = Rc::new(RefCell::new(Vec::new()));
         // DB_VERSION at the time all_files was loaded; 0 entries force a load
         let files_db_version: Rc<Cell<usize>> = Rc::new(Cell::new(0));
+        // Throttle clock for the stale reload above
+        let last_files_load: Rc<Cell<Option<std::time::Instant>>> = Rc::new(Cell::new(None));
 
         main_window.on_show_apps({
             let icon_cache = icon_cache.clone();
@@ -271,6 +332,7 @@ fn main() -> Result<()> {
         main_window.on_show_files({
             let all_files = all_files.clone();
             let files_db_version = files_db_version.clone();
+            let last_files_load = last_files_load.clone();
             let hide_patterns = hide_patterns.clone();
             let weak = main_window.as_weak();
             move || {
@@ -279,21 +341,13 @@ fn main() -> Result<()> {
                     // last load (watcher bumps DB_VERSION); otherwise the
                     // in-memory copy is reused — reading all 180k rows per tab
                     // open froze the UI for up to a second.
-                    load_files_if_stale(&all_files, &files_db_version);
+                    load_files_if_stale(&all_files, &files_db_version, &last_files_load);
                     window.set_files(
-                        Rc::new(VecModel::from(
-                            all_files
-                                .borrow()
-                                .iter()
-                                .filter(|f| {
-                                    !hide_patterns
-                                        .iter()
-                                        .any(|p| f.name.starts_with(p.as_str()))
-                                })
-                                .map(build_file_item)
-                                .take(MAX_RENDERED)
-                                .collect::<Vec<FileItem>>(),
-                        ))
+                        Rc::new(VecModel::from(files_view(
+                            &all_files.borrow(),
+                            &hide_patterns,
+                            window.get_files_sort(),
+                        )))
                         .into(),
                     );
                 }
@@ -305,12 +359,14 @@ fn main() -> Result<()> {
             move |query: slint::SharedString| {
                 if let Some(window) = weak.upgrade() {
                     let files = all_files.borrow();
-                    let items =
-                        fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str())
-                            .into_iter()
-                            .take(MAX_RENDERED)
-                            .map(build_file_item)
-                            .collect::<Vec<FileItem>>();
+                    let mut hits =
+                        fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str());
+                    sort_entries(&mut hits, window.get_files_sort());
+                    let items = hits
+                        .into_iter()
+                        .take(MAX_RENDERED)
+                        .map(build_file_item)
+                        .collect::<Vec<FileItem>>();
                     window.set_files(Rc::new(VecModel::from(items)).into());
                 }
             }
@@ -320,6 +376,7 @@ fn main() -> Result<()> {
             let all_apps = all_apps.clone();
             let all_files = all_files.clone();
             let files_db_version = files_db_version.clone();
+            let last_files_load = last_files_load.clone();
             let hide_patterns = hide_patterns.clone();
             let weak = main_window.as_weak();
             move |query: slint::SharedString| {
@@ -337,7 +394,7 @@ fn main() -> Result<()> {
                             Err(err) => eprintln!("failed to open db for apps refresh: {err}"),
                         }
                     }
-                    load_files_if_stale(&all_files, &files_db_version);
+                    load_files_if_stale(&all_files, &files_db_version, &last_files_load);
                     let apps = all_apps.borrow();
                     let app_items = filter_items(&apps, query.as_str(), "", &icon_cache)
                         .into_iter()
@@ -522,7 +579,12 @@ fn main() -> Result<()> {
                                     }
                                 });
                             }
-                            Err(err) => eprintln!("failed to create window: {err}"),
+                            // Keep the db_state for a retry on the next toggle;
+                            // the Loading pill stays up as the retry indicator.
+                            Err((err, db_state)) => {
+                                eprintln!("failed to create window: {err}");
+                                *s = UiState::Fresh { db_state };
+                            }
                         }
                     }
                 }

@@ -8,12 +8,29 @@ repo="https://github.com/sakurartro/luma"
 bin="luma_rust"
 dest="${1:-$HOME/.local/bin}"
 
-mkdir -p "$dest"
+if ! command -v curl >/dev/null 2>&1; then
+    echo "Error: curl is required to download the release." >&2
+    exit 1
+fi
+
 arch=$(uname -m)
+if [ "$arch" != "x86_64" ]; then
+    echo "Error: no build is published for architecture '$arch' yet (only x86_64)." >&2
+    exit 1
+fi
+
+if ! mkdir -p "$dest" || [ ! -w "$dest" ]; then
+    echo "Error: cannot create or write to '$dest' (check permissions, or try a user-owned dir like ~/.local/bin)." >&2
+    exit 1
+fi
+
 url="$repo/releases/latest/download/$bin-$arch"
 
 echo "Downloading $url"
-curl -fsSL "$url" -o "$dest/$bin"
+if ! curl -fsSL "$url" -o "$dest/$bin"; then
+    echo "Error: download failed (check your network; the release exists at $repo/releases)." >&2
+    exit 1
+fi
 chmod +x "$dest/$bin"
 
 echo "Installed: $dest/$bin"

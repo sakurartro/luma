@@ -13,15 +13,19 @@ pub fn notify_running() -> bool {
 }
 
 /// Binds the toggle socket. Called before the heavy init so keybinds during
-/// startup reach us instead of spawning duplicate instances. A stale socket
-/// file from a crashed instance is removed only when binding fails, so a live
-/// instance's socket is never stolen.
-pub fn bind_socket() -> UnixListener {
+/// startup reach us instead of spawning duplicate instances. If the socket
+/// file exists, a successful connect means a live instance owns it (do not
+/// steal it), while a failed connect means it is stale and safe to rebind.
+/// None = a live instance is already running.
+pub fn bind_socket() -> Option<UnixListener> {
     match UnixListener::bind(SOCKET_PATH) {
-        Ok(listener) => listener,
+        Ok(listener) => Some(listener),
         Err(_) => {
+            if UnixStream::connect(SOCKET_PATH).is_ok() {
+                return None;
+            }
             let _ = std::fs::remove_file(SOCKET_PATH);
-            UnixListener::bind(SOCKET_PATH).expect("failed to bind toggle socket")
+            Some(UnixListener::bind(SOCKET_PATH).expect("failed to bind toggle socket"))
         }
     }
 }
