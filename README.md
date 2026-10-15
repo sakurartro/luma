@@ -7,6 +7,8 @@
 
 **A fast, native launcher for Linux**
 
+![Luma demo](src/frontend/assets/gameplay.gif)
+
 </div>
 
 ## Install
