@@ -1,4 +1,3 @@
-
 <div align="center">
 
 <img src="src/frontend/assets/file_0000000070c0820abb8763205e48e493.png" width="120" alt="Luma logo">
@@ -20,44 +19,91 @@ curl -fsSL https://raw.githubusercontent.com/sakurartro/luma/main/install.sh | s
 The script downloads the binary into `~/.local/bin` (or a path of your choice: `... | sh -s /usr/local/bin`).
 
 Luma does not grab global keys itself — on Wayland that is forbidden by
-protocol design. It is launched via the command `luma_rust --toggle`, which
-shows/hides the window of the running instance. Launching the binary again
-while an instance is live also acts as a toggle. A cold start without the
-flag opens the window right away.
+protocol design. The keybind runs `luma_rust --toggle`, which shows/hides
+the window of the running instance; launching the binary again while an
+instance is live acts the same. A cold start without the flag opens the
+window right away.
+
+## Features
+
+- Fuzzy search of applications and files
+- Launch ranking from usage stats (with time decay), pinned apps on top (right-click to pin/unpin)
+- Category filter pills
+- Calculator (`2 + 2`) and currency conversion (`100 usd to eur`)
+- File index with a background watcher and scan progress
+- Configurable colors, search dirs and hide patterns via `settings.json`
+- `Enter` launches the top result
+
+## Configuration
+
+Settings live at `~/.config/luma/settings.json`. The file is created with
+defaults on first run; a broken file falls back to defaults (the file is kept).
+The app database lives at `~/.config/luma/main.sqlite3` (`$XDG_CONFIG_HOME`
+respected) and refreshes in the background when `/usr/share/applications` changes.
+
+- `bg`, `surface`, `hover`, `selected`, `border`, `accent`, `text`, `text_dim` — colors, `#RRGGBB` (leading `#` optional). A value that fails to parse renders as black.
+- `search_dirs` — list of paths indexed for file search, `~/` allowed
+- `hide_patterns` — prefix match on file names; the default `["."]` hides all dotfiles
+
+Full example (the defaults):
+
+```json
+{
+  "bg": "#0E120B", "surface": "#151B10", "hover": "#1E2716", "selected": "#28331C",
+  "border": "#2C3620", "accent": "#A9B665", "text": "#E4E7D0", "text_dim": "#7E8A6C",
+  "search_dirs": ["~/Documents", "~/Pictures", "~/Desktop"],
+  "hide_patterns": ["."]
+}
+```
+
+### Palettes
+
+Cold dark:
+
+```json
+{"bg": "#0D1117", "surface": "#161B22", "hover": "#1C2431", "selected": "#24304A", "border": "#2D3748", "accent": "#58A6FF", "text": "#E6EDF3", "text_dim": "#8B949E"}
+```
+
+Warm (gruvbox-like):
+
+```json
+{"bg": "#282828", "surface": "#32302F", "hover": "#3C3836", "selected": "#504945", "border": "#665C54", "accent": "#D8A657", "text": "#FBF1C7", "text_dim": "#A89984"}
+```
+
+Light:
+
+```json
+{"bg": "#FBF7EF", "surface": "#F1EBDD", "hover": "#E9E1CE", "selected": "#DFE4CB", "border": "#D3CBB2", "accent": "#5B7A3A", "text": "#2E3324", "text_dim": "#8A8B76"}
+```
 
 ## Hyprland
 
-**Keybind:**
+**Keybind** — stock in `~/.config/hypr/hyprland.conf`; Omarchy (which does
+not read `hyprland.conf`; the entry point is the Lua file) in
+`~/.config/hypr/bindings.lua`:
 
-- **stock** — in `~/.config/hypr/hyprland.conf`:
+```ini
+bind = SUPER, Space, exec, luma_rust --toggle
+```
 
-  ```ini
-  bind = SUPER, Space, exec, luma_rust --toggle
-  ```
+```lua
+hl.bind("SUPER + SPACE", hl.dsp.exec_cmd("luma_rust --toggle"))
+```
 
-- **Omarchy (Lua config)** — in `~/.config/hypr/bindings.lua`:
+**Floating window** for the app id `luma-rust` (Wayland apps cannot request
+floating themselves — the compositor decides) — stock:
 
-  ```lua
-  hl.bind("SUPER + SPACE", hl.dsp.exec_cmd("luma_rust --toggle"))
-  ```
+```ini
+windowrule = float, class:^(luma-rust)$
+```
 
-**Floating window** (Wayland apps cannot request floating themselves — the
-compositor decides). Rule for the app id `luma-rust`:
+Omarchy in `~/.config/hypr/hyprland.lua`:
 
-- **stock** — in `~/.config/hypr/hyprland.conf`:
+```lua
+o.window("^(luma-rust)$", { float = true, center = true })
+```
 
-  ```ini
-  windowrule = float, class:^(luma-rust)$
-  ```
-
-- **Omarchy (Lua config)** — in `~/.config/hypr/hyprland.lua` (Omarchy does
-  not read `hyprland.conf`; the entry point is the Lua file):
-
-  ```lua
-  o.window("^(luma-rust)$", { float = true, center = true })
-  ```
-
-Reload the config afterwards: `hyprctl reload`.
+Reload afterwards: `hyprctl reload`.
 
 ## niri
 
@@ -69,7 +115,7 @@ binds {
 }
 ```
 
-**Floating window** — in `~/.config/niri/config.kdl`:
+**Floating window** — same file:
 
 ```kdl
 window-rule {
@@ -78,13 +124,49 @@ window-rule {
 }
 ```
 
-Restart niri afterwards to apply the config.
+Restart niri to apply. If `Super+Space` is already taken (e.g. input source
+switch), pick another combo — e.g. `SUPER, D` / `Mod+D` — and use it everywhere.
 
-If `Super+Space` is already taken (e.g. input source switch), pick another
-combo — e.g. `SUPER, D` / `Mod+D` — and use it consistently everywhere.
+## GNOME / KDE (X11)
 
-## Data
+**GNOME** — Settings → Keyboard → Custom Shortcuts, command `luma_rust --toggle`.
+GNOME has no window rules; the window opens wherever the DE places it (force
+floating with an extension, e.g. *Try*).
 
-The app database lives at `$XDG_CONFIG_HOME/luma/main.sqlite3`
-(`~/.config/luma/main.sqlite3` by default) and refreshes in the background
-when `/usr/share/applications` changes.
+**KDE** — System Settings → Shortcuts → Add Custom Command `luma_rust --toggle`.
+Floating via Window Rules with Window class `luma-rust` (verify with `xprop`
+that the class matches on X11).
+
+Transparency on X11 requires a compositor — GNOME and KDE ship one by default.
+
+## Requirements
+
+- Linux
+- The prebuilt binary links at runtime against libfontconfig, libGL (mesa) and libxkbcommon
+
+## Build from source
+
+```sh
+cargo build --release
+```
+
+Dev packages (Debian/Ubuntu naming): `libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libxcb1-dev`. Binary: `target/release/luma_rust`.
+
+## Troubleshooting
+
+- Reset — delete `~/.config/luma/` (settings and database are recreated)
+- Stuck hotkey — kill the process or remove `/tmp/luma-rust.sock`
+- Logs go to stderr — run Luma from a terminal to see them
+
+## Uninstall
+
+```sh
+rm ~/.local/bin/luma_rust && rm -rf ~/.config/luma
+```
+
+## Known limitations
+
+- `.desktop` Exec parsing is whitespace-based — quoted args like `sh -c "foo bar"` break
+- `OnlyShowIn`, `Path` and `TryExec` desktop keys are ignored
+- Contents of a directory moved into an indexed tree are indexed on the next start
+- Global hotkey grabbing is impossible on Wayland by design — hence `--toggle`
