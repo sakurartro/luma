@@ -11,9 +11,15 @@ pub static INDEX_TOTAL: AtomicUsize = AtomicUsize::new(0);
 pub static INDEXED: AtomicUsize = AtomicUsize::new(0);
 pub static INDEX_DONE: AtomicBool = AtomicBool::new(true);
 
+// Bumped whenever the files DB changes (scan finished or watcher applied an
+// edit); the UI uses it to know when its in-memory copy is stale.
+pub static DB_VERSION: AtomicUsize = AtomicUsize::new(0);
+
 #[derive(Debug)]
 pub struct FileEntry {
     pub name: String,
+    // lowercase name for fuzzy search, filled where the struct is built
+    pub name_lower: Vec<char>,
     pub path: String,
     pub is_dir: bool,
 }
@@ -66,16 +72,19 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
                 continue;
             }
             let path = entry.path();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let name_lower = name.to_lowercase().chars().collect();
             batch.push(FileEntry {
-                name: path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
+                name,
+                name_lower,
                 path: path.to_string_lossy().into_owned(),
                 is_dir: path.is_dir(),
             });
-            if batch.len() == 100 {
+            if batch.len() == 5000 {
                 insert_batch(&batch, conn)?;
                 INDEXED.fetch_add(batch.len(), Ordering::Relaxed);
                 batch.clear();
@@ -89,6 +98,7 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
     }
 
     INDEX_DONE.store(true, Ordering::Relaxed);
+    DB_VERSION.fetch_add(1, Ordering::Relaxed);
 
     Ok(())
 }
@@ -117,6 +127,7 @@ mod tests {
         assert_eq!(INDEX_TOTAL.load(Ordering::Relaxed), 2);
         assert_eq!(INDEXED.load(Ordering::Relaxed), 2);
         assert!(INDEX_DONE.load(Ordering::Relaxed));
+        assert_eq!(DB_VERSION.load(Ordering::Relaxed), 1);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -3,8 +3,8 @@ mod backend;
 mod toggle;
 use anyhow::Result;
 use backend::apps::apps_search::{App, Apps};
-use backend::apps::db_init::{DbState, db_path};
-use backend::apps::db_service::{get_category_scores, record_launch};
+use backend::apps::db_init::{DbState, open_conn};
+use backend::apps::db_service::{get_category_scores, record_launch, set_pinned};
 use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
 use backend::files::db_service as files_db;
@@ -12,7 +12,6 @@ use backend::files::files_search::{self, FileEntry};
 use backend::files::watcher::start_files_watcher;
 use backend::general_features::engine;
 use backend::settings;
-use rusqlite::Connection;
 use slint::VecModel;
 use slint::winit_030::WinitWindowAccessor;
 use std::cell::{Cell, RefCell};
@@ -45,6 +44,7 @@ fn build_item(app: &App, cache: &RefCell<HashMap<String, slint::Image>>) -> AppI
         path: app.path.as_str().into(),
         command: app.command.as_str().into(),
         icon,
+        pinned: app.pinned,
     }
 }
 
@@ -55,6 +55,26 @@ fn build_items(apps: &[App], cache: &RefCell<HashMap<String, slint::Image>>) -> 
 // Render cap: thousands of slint cards kill layout/memory; results are
 // ranked, the tail is what nobody scrolls to
 const MAX_RENDERED: usize = 200;
+
+// Per-section cap for the unified (main view) search
+const MAX_MIXED: usize = 20;
+
+// Reload the in-memory file index when the watcher bumped DB_VERSION; keeps
+// per-call cost off repeated searches.
+fn load_files_if_stale(all_files: &RefCell<Vec<FileEntry>>, files_db_version: &Cell<usize>) {
+    let version = files_search::DB_VERSION.load(Ordering::Relaxed);
+    if version == files_db_version.get() && !all_files.borrow().is_empty() {
+        return;
+    }
+    // Own connection (same pattern as on_launch_app); reloads are rare.
+    match open_conn().and_then(|conn| files_db::get_files(&conn).map_err(anyhow::Error::from)) {
+        Ok(entries) => {
+            *all_files.borrow_mut() = entries;
+            files_db_version.set(version);
+        }
+        Err(err) => eprintln!("files refresh error, {err}"),
+    }
+}
 
 fn build_file_item(file: &FileEntry) -> FileItem {
     FileItem {
@@ -89,7 +109,7 @@ fn filter_items(
     category: &str,
     cache: &RefCell<HashMap<String, slint::Image>>,
 ) -> Vec<AppItem> {
-    fuzzy::fuzzy_search(apps, |app| app.app_name.as_str(), query)
+    fuzzy::fuzzy_search(apps, |app| app.name_lower.as_slice(), query)
         .into_iter()
         .filter(|app| category.is_empty() || app.categories.iter().any(|cat| cat == category))
         .map(|app| build_item(app, cache))
@@ -197,6 +217,8 @@ fn main() -> Result<()> {
         let icon_cache = Rc::new(RefCell::new(HashMap::new()));
         let all_apps: Rc<RefCell<Vec<App>>> = Rc::new(RefCell::new(Vec::new()));
         let all_files: Rc<RefCell<Vec<FileEntry>>> = Rc::new(RefCell::new(Vec::new()));
+        // DB_VERSION at the time all_files was loaded; 0 entries force a load
+        let files_db_version: Rc<Cell<usize>> = Rc::new(Cell::new(0));
 
         main_window.on_show_apps({
             let icon_cache = icon_cache.clone();
@@ -248,34 +270,32 @@ fn main() -> Result<()> {
         });
         main_window.on_show_files({
             let all_files = all_files.clone();
+            let files_db_version = files_db_version.clone();
             let hide_patterns = hide_patterns.clone();
             let weak = main_window.as_weak();
             move || {
                 if let Some(window) = weak.upgrade() {
-                    // Own connection (same pattern as on_launch_app); mode
-                    // switches are rare.
-                    match Connection::open(db_path()).and_then(|conn| files_db::get_files(&conn)) {
-                        Ok(entries) => {
-                            *all_files.borrow_mut() = entries;
-                            window.set_files(
-                                Rc::new(VecModel::from(
-                                    all_files
-                                        .borrow()
+                    // Reload from the db only when it actually changed since the
+                    // last load (watcher bumps DB_VERSION); otherwise the
+                    // in-memory copy is reused — reading all 180k rows per tab
+                    // open froze the UI for up to a second.
+                    load_files_if_stale(&all_files, &files_db_version);
+                    window.set_files(
+                        Rc::new(VecModel::from(
+                            all_files
+                                .borrow()
+                                .iter()
+                                .filter(|f| {
+                                    !hide_patterns
                                         .iter()
-                                        .filter(|f| {
-                                            !hide_patterns
-                                                .iter()
-                                                .any(|p| f.name.starts_with(p.as_str()))
-                                        })
-                                        .map(build_file_item)
-                                        .take(MAX_RENDERED)
-                                        .collect::<Vec<FileItem>>(),
-                                ))
-                                .into(),
-                            );
-                        }
-                        Err(err) => eprintln!("files refresh error, {err}"),
-                    }
+                                        .any(|p| f.name.starts_with(p.as_str()))
+                                })
+                                .map(build_file_item)
+                                .take(MAX_RENDERED)
+                                .collect::<Vec<FileItem>>(),
+                        ))
+                        .into(),
+                    );
                 }
             }
         });
@@ -286,12 +306,58 @@ fn main() -> Result<()> {
                 if let Some(window) = weak.upgrade() {
                     let files = all_files.borrow();
                     let items =
-                        fuzzy::fuzzy_search(&files, |file| file.name.as_str(), query.as_str())
+                        fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str())
                             .into_iter()
                             .take(MAX_RENDERED)
                             .map(build_file_item)
                             .collect::<Vec<FileItem>>();
                     window.set_files(Rc::new(VecModel::from(items)).into());
+                }
+            }
+        });
+        main_window.on_search_all({
+            let icon_cache = icon_cache.clone();
+            let all_apps = all_apps.clone();
+            let all_files = all_files.clone();
+            let files_db_version = files_db_version.clone();
+            let hide_patterns = hide_patterns.clone();
+            let weak = main_window.as_weak();
+            move |query: slint::SharedString| {
+                if let Some(window) = weak.upgrade() {
+                    // First unified search lazy-loads the app list (own
+                    // connection, same pattern as on_launch_app).
+                    if all_apps.borrow().is_empty() {
+                        match open_conn() {
+                            Ok(mut conn) => match Apps::refresh(&mut conn) {
+                                Ok(apps_refresh_obj) => {
+                                    *all_apps.borrow_mut() = apps_refresh_obj.apps;
+                                }
+                                Err(err) => eprintln!("apps refresh error, {err}"),
+                            },
+                            Err(err) => eprintln!("failed to open db for apps refresh: {err}"),
+                        }
+                    }
+                    load_files_if_stale(&all_files, &files_db_version);
+                    let apps = all_apps.borrow();
+                    let app_items = filter_items(&apps, query.as_str(), "", &icon_cache)
+                        .into_iter()
+                        .take(MAX_MIXED)
+                        .collect::<Vec<AppItem>>();
+                    window.set_apps(Rc::new(VecModel::from(app_items)).into());
+                    let files = all_files.borrow();
+                    let file_items = fuzzy::fuzzy_search(
+                        &files,
+                        |file| file.name_lower.as_slice(),
+                        query.as_str(),
+                    )
+                    .into_iter()
+                    .filter(|file| {
+                        !hide_patterns.iter().any(|p| file.name.starts_with(p.as_str()))
+                    })
+                    .take(MAX_MIXED)
+                    .map(build_file_item)
+                    .collect::<Vec<FileItem>>();
+                    window.set_files(Rc::new(VecModel::from(file_items)).into());
                 }
             }
         });
@@ -345,13 +411,62 @@ fn main() -> Result<()> {
             }
 
             // Own connection (same pattern as watcher.rs); launches are rare.
-            match Connection::open(db_path()) {
+            match open_conn() {
                 Ok(mut conn) => {
                     if let Err(err) = record_launch(&mut conn, &app.path) {
                         eprintln!("failed to record launch of {program}: {err}");
                     }
                 }
                 Err(err) => eprintln!("failed to open db for launch record: {err}"),
+            }
+        });
+
+        main_window.on_toggle_pin({
+            let icon_cache = icon_cache.clone();
+            let all_apps = all_apps.clone();
+            let weak = main_window.as_weak();
+            move |app: AppItem| {
+                let pinned = match open_conn() {
+                    Ok(mut conn) => match set_pinned(&mut conn, app.path.as_str()) {
+                        Ok(pinned) => pinned,
+                        Err(err) => {
+                            eprintln!("failed to toggle pin of {}: {err}", app.path);
+                            return;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("failed to open db for pin toggle: {err}");
+                        return;
+                    }
+                };
+
+                // Keep the in-memory copy in sync and re-sort, same ordering
+                // as get_data (pinned first, then score).
+                {
+                    let mut apps = all_apps.borrow_mut();
+                    for a in apps.iter_mut() {
+                        if a.path == app.path.as_str() {
+                            a.pinned = pinned;
+                        }
+                    }
+                    apps.sort_by(|a, b| {
+                        b.pinned
+                            .cmp(&a.pinned)
+                            .then_with(|| b.score.cmp(&a.score))
+                    });
+                }
+
+                // Re-render the apps view with the current query/category.
+                if let Some(window) = weak.upgrade() {
+                    let apps = all_apps.borrow();
+                    let items = filter_items(
+                        &apps,
+                        window.get_input_text().as_str(),
+                        window.get_selected_category().as_str(),
+                        &icon_cache,
+                    );
+                    window.set_apps(Rc::new(VecModel::from(items)).into());
+                }
             }
         });
 
@@ -432,10 +547,10 @@ fn main() -> Result<()> {
     // in the background with progress reported via files_search::INDEX_*.
     std::thread::spawn(|| {
         let init = (|| -> Result<DbState> {
-            let icons = Apps::initial_icons_scan()?;
             let mut db_state = DbState::init()?;
+            let icons = Apps::initial_icons_scan(&mut db_state.conn)?;
             let apps_obj = Apps::find_apps(&mut db_state.conn, &icons)?;
-            start_watcher(icons);
+            start_watcher();
             let _ = apps_obj.apps;
             Ok(db_state)
         })();
@@ -445,9 +560,8 @@ fn main() -> Result<()> {
 
                 // Own connection: db_state.conn already moved to the UI side.
                 let dirs = settings::load().search_dirs;
-                match Connection::open(db_path()) {
+                match open_conn() {
                     Ok(mut conn) => {
-                        let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
                         if let Err(err) = files_search::scan_dirs(&mut conn, &dirs) {
                             eprintln!("file scan error: {err}");
                         }

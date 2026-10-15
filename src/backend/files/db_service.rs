@@ -42,14 +42,18 @@ pub fn get_files(conn: &Connection) -> rusqlite::Result<Vec<FileEntry>> {
         let mut stmt = conn.prepare(sql)?;
         let mut rows: Vec<FileEntry> = stmt
             .query_map([], |row| {
+                let name: String = row.get(0)?;
+                let name_lower = name.to_lowercase().chars().collect();
                 Ok(FileEntry {
-                    name: row.get(0)?,
+                    name,
+                    name_lower,
                     path: row.get(1)?,
                     is_dir,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        // same ordering the lowercase-string sort gave, without per-compare allocs
+        rows.sort_by(|a, b| a.name_lower.cmp(&b.name_lower));
         entries.extend(rows);
     }
 
@@ -84,9 +88,9 @@ mod tests {
         let mut conn = conn();
         insert_batch(
             &[
-                FileEntry { name: "b.txt".into(), path: "/d/b.txt".into(), is_dir: false },
-                FileEntry { name: "sub".into(), path: "/d/sub".into(), is_dir: true },
-                FileEntry { name: "a.txt".into(), path: "/d/a.txt".into(), is_dir: false },
+                FileEntry { name: "b.txt".into(), name_lower: vec!['b', '.', 't', 'x', 't'], path: "/d/b.txt".into(), is_dir: false },
+                FileEntry { name: "sub".into(), name_lower: vec!['s', 'u', 'b'], path: "/d/sub".into(), is_dir: true },
+                FileEntry { name: "a.txt".into(), name_lower: vec!['a', '.', 't', 'x', 't'], path: "/d/a.txt".into(), is_dir: false },
             ],
             &mut conn,
         )

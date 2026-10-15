@@ -143,20 +143,37 @@ pub fn del_app(conn: &mut Connection, path: String) -> Result<()> {
     Ok(())
 }
 
+// Toggle; returns the new state.
+pub fn set_pinned(conn: &mut Connection, path: &str) -> Result<bool> {
+    conn.execute(
+        "UPDATE applications SET pinned = 1 - pinned WHERE app_path = ?1",
+        [path],
+    )?;
+    let pinned: bool = conn.query_row(
+        "SELECT pinned FROM applications WHERE app_path = ?1",
+        [path],
+        |row| row.get(0),
+    )?;
+    Ok(pinned)
+}
+
 pub fn get_data(conn: &mut Connection) -> rusqlite::Result<Vec<App>> {
     let now = now_secs();
     let mut stmt = conn.prepare(
-        "SELECT id, name, app_path, icon_path, command, times_launched, COALESCE(last_launched, 0) FROM applications",
+        "SELECT id, name, app_path, icon_path, command, times_launched, COALESCE(last_launched, 0), pinned FROM applications",
     )?;
 
     let mut apps: Vec<(i64, App)> = stmt
         .query_map([], |row| {
             let count: i64 = row.get(5)?;
             let last: i64 = row.get(6)?;
+            let name: String = row.get(1)?;
+            let name_lower = name.to_lowercase().chars().collect();
             Ok((
                 row.get(0)?,
                 App {
-                    app_name: row.get(1)?,
+                    app_name: name,
+                    name_lower,
                     path: row.get(2)?,
                     icon_path: row.get(3)?,
                     command: row.get(4)?,
@@ -164,6 +181,7 @@ pub fn get_data(conn: &mut Connection) -> rusqlite::Result<Vec<App>> {
                     time_launched: count,
                     last_launched: last,
                     score: decayed_count(count, last, now),
+                    pinned: row.get(7)?,
                 },
             ))
         })?
@@ -175,7 +193,11 @@ pub fn get_data(conn: &mut Connection) -> rusqlite::Result<Vec<App>> {
     }
 
     let mut apps: Vec<App> = apps.into_iter().map(|(_, app)| app).collect();
-    apps.sort_by(|a, b| b.score.cmp(&a.score));
+    apps.sort_by(|a, b| {
+        b.pinned
+            .cmp(&a.pinned)
+            .then_with(|| b.score.cmp(&a.score))
+    });
     Ok(apps)
 }
 
