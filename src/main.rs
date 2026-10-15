@@ -96,22 +96,17 @@ fn build_file_item(file: &FileEntry) -> FileItem {
     }
 }
 
-// Filtered + sorted files tab content. Sort modes: 0 = name (the order
-// get_files returns), 1 = newest first, 2 = oldest first; folders stay in
-// front in every mode.
-fn files_view(files: &[FileEntry], hide_patterns: &[String], sort: i32) -> Vec<FileItem> {
-    let mut filtered: Vec<&FileEntry> = files
-        .iter()
-        .filter(|f| !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str())))
-        .collect();
+// Folders stay in front in every sort mode; ties broken by name.
+// Sort modes: 1 = newest first, 2 = oldest first, 0 = untouched.
+fn sort_entries(entries: &mut [&FileEntry], sort: i32) {
     match sort {
-        1 => filtered.sort_by(|a, b| {
+        1 => entries.sort_by(|a, b| {
             b.is_dir
                 .cmp(&a.is_dir)
                 .then_with(|| b.mtime.cmp(&a.mtime))
                 .then_with(|| b.name_lower.cmp(&a.name_lower))
         }),
-        2 => filtered.sort_by(|a, b| {
+        2 => entries.sort_by(|a, b| {
             b.is_dir
                 .cmp(&a.is_dir)
                 .then_with(|| a.mtime.cmp(&b.mtime))
@@ -119,6 +114,16 @@ fn files_view(files: &[FileEntry], hide_patterns: &[String], sort: i32) -> Vec<F
         }),
         _ => {}
     }
+}
+
+// Filtered + sorted files tab content. Sort modes: 0 = name (the order
+// get_files returns), 1 = newest first, 2 = oldest first.
+fn files_view(files: &[FileEntry], hide_patterns: &[String], sort: i32) -> Vec<FileItem> {
+    let mut filtered: Vec<&FileEntry> = files
+        .iter()
+        .filter(|f| !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str())))
+        .collect();
+    sort_entries(&mut filtered, sort);
     filtered
         .into_iter()
         .take(MAX_RENDERED)
@@ -342,12 +347,14 @@ fn main() -> Result<()> {
             move |query: slint::SharedString| {
                 if let Some(window) = weak.upgrade() {
                     let files = all_files.borrow();
-                    let items =
-                        fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str())
-                            .into_iter()
-                            .take(MAX_RENDERED)
-                            .map(build_file_item)
-                            .collect::<Vec<FileItem>>();
+                    let mut hits =
+                        fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str());
+                    sort_entries(&mut hits, window.get_files_sort());
+                    let items = hits
+                        .into_iter()
+                        .take(MAX_RENDERED)
+                        .map(build_file_item)
+                        .collect::<Vec<FileItem>>();
                     window.set_files(Rc::new(VecModel::from(items)).into());
                 }
             }

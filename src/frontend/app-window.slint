@@ -508,7 +508,11 @@ if root.input-text == "": Text {
                             TouchArea {
                                 clicked => {
                                     root.files-sort = i;
-                                    root.show_files();
+                                    if root.input-text != "" {
+                                        root.search_files(root.input-text);
+                                    } else {
+                                        root.show_files();
+                                    }
                                 }
                             }
                         }
