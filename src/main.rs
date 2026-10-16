@@ -7,6 +7,7 @@ use backend::apps::db_init::{DbState, open_conn};
 use backend::apps::db_service::{get_category_scores, record_launch, set_pinned};
 use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
+use backend::files::clip;
 use backend::files::db_service as files_db;
 use backend::files::files_search::{self, FileEntry};
 use backend::files::watcher::start_files_watcher;
@@ -21,7 +22,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::process::Stdio;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 // Result of the background init, picked up by the UI-thread drain timer.
@@ -30,6 +31,13 @@ static INIT_DB: Mutex<Option<DbState>> = Mutex::new(None);
 
 // Toggle requests from the keybind socket; drained by a timer on the UI thread.
 static TOGGLES: AtomicUsize = AtomicUsize::new(0);
+
+// Finished background files reload, picked up by load_files_if_stale on the
+// UI thread (same handoff pattern as INIT_DB; no cross-thread slint invokes).
+static FILES_RELOAD: Mutex<Option<(usize, Vec<FileEntry>)>> = Mutex::new(None);
+// Coalescing: one background reload at a time; extra presses reuse the
+// in-memory copy instead of stacking reader threads.
+static FILES_RELOAD_RUNNING: AtomicBool = AtomicBool::new(false);
 
 fn build_item(app: &App, cache: &RefCell<HashMap<String, slint::Image>>) -> AppItem {
     let icon = cache
@@ -60,9 +68,11 @@ const MAX_RENDERED: usize = 200;
 const MAX_MIXED: usize = 20;
 
 // Reload the in-memory file index when the watcher bumped DB_VERSION; keeps
-// per-call cost off repeated searches. Reloads are throttled: the files
-// watcher bumps DB_VERSION on every fs event, and reading all 180k rows on
-// the UI thread froze the UI for up to two seconds per keystroke.
+// per-call cost off repeated searches. The heavy read+sort of ~200k rows runs
+// in a background thread (a synchronous reload here froze the UI for seconds
+// per Alt+2 press), result is applied on the next UI-thread call through
+// FILES_RELOAD. Reloads are throttled and coalesced: the files watcher bumps
+// DB_VERSION on every fs event, so presses come in faster than reloads.
 const FILES_RELOAD_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn load_files_if_stale(
@@ -70,6 +80,11 @@ fn load_files_if_stale(
     files_db_version: &Cell<usize>,
     last_load: &Cell<Option<std::time::Instant>>,
 ) {
+    // Apply a finished background reload.
+    if let Some((version, entries)) = FILES_RELOAD.lock().unwrap().take() {
+        *all_files.borrow_mut() = entries;
+        files_db_version.set(version);
+    }
     let version = files_search::DB_VERSION.load(Ordering::Relaxed);
     if version == files_db_version.get() && !all_files.borrow().is_empty() {
         return;
@@ -77,15 +92,18 @@ fn load_files_if_stale(
     if last_load.get().is_some_and(|t| t.elapsed() < FILES_RELOAD_MIN_INTERVAL) {
         return;
     }
-    // Own connection (same pattern as on_launch_app); reloads are rare.
-    match open_conn().and_then(|conn| files_db::get_files(&conn).map_err(anyhow::Error::from)) {
-        Ok(entries) => {
-            *all_files.borrow_mut() = entries;
-            files_db_version.set(version);
-            last_load.set(Some(std::time::Instant::now()));
-        }
-        Err(err) => eprintln!("files refresh error, {err}"),
+    if FILES_RELOAD_RUNNING.swap(true, Ordering::Relaxed) {
+        return;
     }
+    last_load.set(Some(std::time::Instant::now()));
+    // Own connection (same pattern as on_launch_app); reloads are rare.
+    std::thread::spawn(move || {
+        match open_conn().and_then(|conn| files_db::get_files(&conn).map_err(anyhow::Error::from)) {
+            Ok(entries) => *FILES_RELOAD.lock().unwrap() = Some((version, entries)),
+            Err(err) => eprintln!("files refresh error, {err}"),
+        }
+        FILES_RELOAD_RUNNING.store(false, Ordering::Relaxed);
+    });
 }
 
 fn build_file_item(file: &FileEntry) -> FileItem {
@@ -632,6 +650,8 @@ fn main() -> Result<()> {
                 }
                 files_search::INDEX_DONE.store(true, Ordering::Relaxed);
                 start_files_watcher(&dirs);
+                // Own thread, no-op without models/clip/; runs to completion.
+                clip::start_indexing();
             }
             Err(err) => eprintln!("init error: {err}"),
         }
