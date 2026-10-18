@@ -144,7 +144,7 @@ Transparency on X11 requires a compositor — GNOME and KDE ship one by default.
 
 ## Requirements
 
-- Linux
+- Linux (glibc 2.39+ — Ubuntu 24.04, Fedora 40+, Arch; the ONNX runtime of the semantic search sets this floor)
 - The prebuilt binary links at runtime against libfontconfig, libGL (mesa) and libxkbcommon
 
 ## Build from source
