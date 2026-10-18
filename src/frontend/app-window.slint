@@ -175,15 +175,19 @@ export component MainWindow inherits Window {
                                     }
                                     if root.apps.length > 0 {
                                         root.launch-app(root.apps[0]);
+                                        root.hide-window();
                                     } else if root.files.length > 0 {
                                         root.open-file(root.files[0]);
+                                        root.hide-window();
                                     } else {
                                         root.run_query(self.text);
                                     }
                                 } else if root.mode == 1 && root.apps.length > 0 {
                                     root.launch-app(root.apps[0]);
+                                    root.hide-window();
                                 } else if root.mode == 2 && root.files.length > 0 {
                                     root.open-file(root.files[0]);
+                                    root.hide-window();
                                 } else {
                                     root.run_query(self.text);
                                 }
@@ -509,6 +513,7 @@ if root.input-text == "": Text {
 
                                 clicked => {
                                     root.launch-app(app);
+                                    root.hide-window();
                                 }
 
                                 pointer-event(e) => {
@@ -652,6 +657,7 @@ if root.input-text == "": Text {
 
                                 clicked => {
                                     root.open-file(file);
+                                    root.hide-window();
                                 }
                             }
                         }
@@ -785,6 +791,7 @@ if root.input-text == "": Text {
 
                                 clicked => {
                                     root.open-file(file);
+                                    root.hide-window();
                                 }
                             }
                         }
