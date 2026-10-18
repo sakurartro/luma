@@ -19,6 +19,10 @@ pub struct Settings {
     // Prefix match on file/folder name; "." hides all dotfiles
     #[serde(default = "default_hide_patterns")]
     pub hide_patterns: Vec<String>,
+    // Semantic (CLIP) photo search; off by default. When enabled, the models
+    // are downloaded from HuggingFace on the next start (~154 MB).
+    #[serde(default)]
+    pub semantic: bool,
 }
 
 fn default_hide_patterns() -> Vec<String> {
@@ -46,6 +50,7 @@ impl Default for Settings {
             text_dim: "#7E8A6C".into(),
             search_dirs: default_search_dirs(),
             hide_patterns: default_hide_patterns(),
+            semantic: false,
         }
     }
 }
@@ -79,4 +84,15 @@ pub fn parse_color(s: &str) -> Color {
         }
     }
     Color::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn template_includes_semantic() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains(r#""semantic":false"#));
+    }
 }
