@@ -89,6 +89,18 @@ impl DbState {
                 path TEXT NOT NULL UNIQUE,
                 mtime INTEGER NOT NULL DEFAULT 0
             );
+
+            -- No FK to files(path): the scan wipes and refills files
+            -- on every start, which would cascade-delete all
+            -- embeddings. Orphans are cleaned up after the scan.
+            CREATE TABLE IF NOT EXISTS embeddings (
+                file_path TEXT NOT NULL,
+                kind TEXT NOT NULL
+                    CHECK (kind = trim(kind) AND kind <> ''),
+                mtime INTEGER NOT NULL DEFAULT 0,
+                vec BLOB NOT NULL,
+                PRIMARY KEY (file_path, kind)
+            );
             "#,
         )?;
 
