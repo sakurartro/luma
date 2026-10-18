@@ -2,26 +2,33 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch: {}
 
 jobs:
   build:
-    # Ubuntu 22.04 for the lowest glibc requirement: binary runs everywhere newer.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Install GUI build dependencies (slint/winit)
+
+      - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libxcb1-dev
+          sudo apt-get install -y build-essential cmake ninja-build g++ pkg-config \
+            libnuma-dev libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libxcb1-dev
+
       - name: Build release binary
-        run: cargo build --release
-      - name: Rename artifact (uname -m matches install.sh)
+        env:
+          RUSTFLAGS: "-C link-args=-lstdc++"
+        run: cargo build --release --locked
+
+      - name: Rename artifact
         run: |
           ARTIFACT="luma_rust-$(uname -m)"
           cp target/release/luma_rust "$ARTIFACT"
           echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
+
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
