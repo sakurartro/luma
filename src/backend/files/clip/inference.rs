@@ -25,12 +25,21 @@ fn model_path(name: &str) -> PathBuf {
         .join(name)
 }
 
-// Inference batch: tensor [N,3,224,224] f32 ≈ N*0.6 MB, so 16 ≈ 10 MB per
-// run — small next to the ort session and the file-scan peak (600 MB budget).
-pub(crate) const INFERENCE_BATCH: usize = 16;
+// Inference batch: tensor [N,3,224,224] f32 ≈ N*0.6 MB, so 4 ≈ 2.5 MB per
+// run. Small on purpose: ORT's arena grows to the peak activation usage of
+// the largest batch (attention maps scale with N) and never returns it to
+// the OS, so a big batch inflates steady-state RSS.
+pub(crate) const INFERENCE_BATCH: usize = 4;
 
 pub(crate) struct ClipModels {
     vision: Session,
+    text: Session,
+    tokenizer: Tokenizer,
+}
+
+// What survives indexing: queries need only the text side; the vision
+// session is dropped after indexing so its ORT arena is freed.
+pub(crate) struct QueryModels {
     text: Session,
     tokenizer: Tokenizer,
 }
@@ -56,15 +65,23 @@ impl ClipModels {
                 return None;
             }
         };
-        let build = |model: &PathBuf| {
-            Session::builder(&env)?
+        // `threads` limits intra-op parallelism; 0 = ORT default. Vision
+        // batches are the heavy part of indexing and would otherwise
+        // saturate all cores; the text side runs one tiny query embedding.
+        let build = |model: &PathBuf, threads: usize| {
+            let mut builder = Session::builder(&env)?
                 .with_optimization_level(GraphOptimizationLevel::Level3)
                 .unwrap_or_else(|e| e.recover())
-                .commit_from_file(model)
+                // the batch size varies (short last group), the pattern
+                // recorded for one size only overallocates for others
+                .with_memory_pattern(false)?;
+            let mut builder =
+                if threads > 0 { builder.with_intra_threads(threads)? } else { builder };
+            builder.commit_from_file(model)
         };
         let (Ok(vision), Ok(text), Ok(tokenizer)) = (
-            build(&vision_model),
-            build(&text_model),
+            build(&vision_model, 2),
+            build(&text_model, 0),
             Tokenizer::from_file(&tokenizer_path).map_err(|e| anyhow!("{e}")),
         ) else {
             eprintln!("clip disabled: models/clip/ is broken");
@@ -73,27 +90,34 @@ impl ClipModels {
         Some(ClipModels { vision, text, tokenizer })
     }
 
+    // End of the indexing worker: consume the full pair, drop the vision
+    // session (its arena is the memory hog) and keep only the query side.
+    pub(crate) fn into_query(self) -> QueryModels {
+        QueryModels { text: self.text, tokenizer: self.tokenizer }
+    }
+
     // None rows = failed images; they stay unindexed and are retried on the
     // next start.
+    // Preprocess only the current batch and run inference on it: keeping the
+    // whole DB chunk preprocessed (~0.6 MB per image) would waste ~150 MB.
     pub(crate) fn embed_images(&mut self, paths: &[String]) -> Vec<Option<Vec<f32>>> {
-        let mut imgs = Vec::with_capacity(paths.len());
-        let mut ok_idx = Vec::new();
-        for (i, p) in paths.iter().enumerate() {
-            match preprocess_image(Path::new(p)) {
-                Ok(img) => {
-                    imgs.push(img);
-                    ok_idx.push(i);
-                }
-                Err(err) => eprintln!("clip: skip {}: {err}", p),
-            }
-        }
         let mut out: Vec<Option<Vec<f32>>> = vec![None; paths.len()];
-        for (g, group) in ok_idx.chunks(INFERENCE_BATCH).enumerate() {
-            let g_imgs: Vec<Array3<f32>> = group.iter().map(|&i| imgs[i].clone()).collect();
-            match run_images(&mut self.vision, &g_imgs) {
+        for (g, group) in paths.chunks(INFERENCE_BATCH).enumerate() {
+            let mut imgs = Vec::with_capacity(group.len());
+            let mut ok_idx = Vec::with_capacity(group.len());
+            for (i, p) in group.iter().enumerate() {
+                match preprocess_image(Path::new(p)) {
+                    Ok(img) => {
+                        imgs.push(img);
+                        ok_idx.push(i);
+                    }
+                    Err(err) => eprintln!("clip: skip {p}: {err}"),
+                }
+            }
+            match run_images(&mut self.vision, &imgs) {
                 Ok(rows) => {
-                    for (row, &i) in rows.into_iter().zip(group) {
-                        out[i] = Some(row);
+                    for (row, i) in rows.into_iter().zip(ok_idx) {
+                        out[g * INFERENCE_BATCH + i] = Some(row);
                     }
                 }
                 Err(err) => eprintln!("clip: batch {g} inference failed: {err}"),
@@ -101,9 +125,10 @@ impl ClipModels {
         }
         out
     }
+}
 
-    // For the future text query; nothing calls it yet.
-    #[allow(dead_code)]
+impl QueryModels {
+    // Kept hot in the MODELS mutex; clip_search calls it per query.
     pub(crate) fn embed_text(&mut self, text: &str) -> Result<Vec<f32>> {
         let ids = tokenize_text(&self.tokenizer, text)?;
         let outputs = self.text.run(ort::inputs!["input_ids" => Tensor::from_array(ids)?])?;
@@ -113,8 +138,16 @@ impl ClipModels {
 
 /// Изображение -> [3,224,224] f32 (RGB, нормализация CLIP).
 fn preprocess_image(path: &Path) -> Result<Array3<f32>> {
-    let img = ImageReader::open(path)
-        .with_context(|| format!("open {}", path.display()))?
+    // Декодинг ограничен: 224x224 на выходе, больше 4096 по стороне и 48 МБ
+    // на буфер не нужно — это режет пиковую память декодинга.
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(48 * 1024 * 1024);
+    let mut reader = ImageReader::open(path)
+        .with_context(|| format!("open {}", path.display()))?;
+    reader.limits(limits);
+    let img = reader
         .decode()
         .with_context(|| format!("decode {}", path.display()))?;
     let resized = image::imageops::resize(
@@ -157,9 +190,9 @@ fn tokenize_text(tokenizer: &Tokenizer, text: &str) -> Result<Array2<i64>> {
     Ok(Array2::from_shape_vec((1, CTX_LEN), ids)?)
 }
 
-// Нормализация векторов при поиске (косинус = dot-product) — будущая задача.
-#[allow(dead_code)]
-fn l2_normalize(v: &mut [f32]) {
+// Cosine = dot-product of normalized vectors; clip_search normalizes both
+// sides before scoring.
+pub(crate) fn l2_normalize(v: &mut [f32]) {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
         for x in v.iter_mut() {

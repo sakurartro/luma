@@ -1,15 +1,42 @@
 // Воркер индексации: после скана файлов выбирает фото без вектора или с
 // устаревшим mtime, считает CLIP-эмбеддинги и пишет их в embeddings.
 
-use super::inference::ClipModels;
+use super::inference::{l2_normalize, ClipModels, QueryModels};
 use crate::backend::apps::db_init::open_conn;
+use crate::backend::files::files_search::FileEntry;
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 // Progress, same polling style as INDEX_* in files_search; no UI hook yet.
 pub static EMB_TOTAL: AtomicUsize = AtomicUsize::new(0);
 pub static EMB_DONE: AtomicUsize = AtomicUsize::new(0);
+
+// Query side of the models, filled at the end of indexing; None until then
+// (or without models/clip/). The vision session is consumed and dropped by
+// into_query() there — its arena is the memory hog and queries don't need it.
+pub static MODELS: Mutex<Option<QueryModels>> = Mutex::new(None);
+
+// Embeddings + their files, snapshot taken once per startup after indexing.
+// Embeddings never change during a session (the watcher does not embed new
+// files), so the snapshot needs no invalidation. vec is l2-normalized.
+pub struct CachedVec {
+    path: String,
+    name: String,
+    name_lower: Vec<char>,
+    mtime: i64,
+    vec: Vec<f32>,
+}
+pub static VECTORS: Mutex<Vec<CachedVec>> = Mutex::new(Vec::new());
+
+// match_kind values stored in FileItem; 0 = by name (the default, no badge).
+pub const MATCH_NAME: i32 = 0;
+pub const MATCH_SEMANTIC: i32 = 1;
+// Measured CLIP ViT-B/32 match band: random pairs ~0.10-0.20, strong hits ~0.27-0.32 ("glowing city" hit 0.2697, control 0.3168, mismatch 0.1881).
+const SEMANTIC_MIN_SCORE: f32 = 0.15;
+const SEMANTIC_MAX_SCORE: f32 = 0.35;
+const SEMANTIC_MAX_HITS: usize = 32;
 
 const KIND: &str = "clip";
 const CANDIDATE_WHERE: &str = "e.file_path IS NULL AND (f.path LIKE '%.jpg' \
@@ -18,6 +45,14 @@ const CANDIDATE_WHERE: &str = "e.file_path IS NULL AND (f.path LIKE '%.jpg' \
 // DB rows read per pass; a multiple of INFERENCE_BATCH.
 const DB_CHUNK: usize = 256;
 
+// Cosine similarity -> UI percent: SEMANTIC_MIN_SCORE maps to 0,
+// SEMANTIC_MAX_SCORE to 100, values outside are clamped.
+fn match_percent(score: f32) -> i32 {
+    (((score - SEMANTIC_MIN_SCORE) / (SEMANTIC_MAX_SCORE - SEMANTIC_MIN_SCORE)) * 100.0)
+        .round()
+        .clamp(0.0, 100.0) as i32
+}
+
 fn vec_to_blob(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
@@ -25,6 +60,94 @@ fn vec_to_blob(v: &[f32]) -> Vec<u8> {
 fn blob_to_vec(b: &[u8]) -> Vec<f32> {
     b.chunks(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+// Snapshot of all clip embeddings joined with their file rows. Photos whose
+// file row vanished between scan and here are excluded by the JOIN.
+fn load_vectors(conn: &Connection) -> Vec<CachedVec> {
+    let sql = format!(
+        "SELECT e.file_path, f.name, f.mtime, e.vec FROM embeddings e
+         JOIN files f ON f.path = e.file_path WHERE e.kind = '{KIND}'"
+    );
+    let Ok(rows) = conn
+        .prepare(&sql)
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .map_err(|err| eprintln!("clip vector cache error: {err}"))
+    else {
+        return Vec::new();
+    };
+    rows.into_iter()
+        .map(|(path, name, mtime, blob)| {
+            let mut vec = blob_to_vec(&blob);
+            l2_normalize(&mut vec);
+            CachedVec {
+                name_lower: name.to_lowercase().chars().collect(),
+                path,
+                name,
+                mtime,
+                vec,
+            }
+        })
+        .collect()
+}
+
+/// Semantic photo search: embeds the query once (~10-50 ms), scores the
+/// in-memory vector cache with dot products, best matches first. Each hit
+/// comes with its match strength as a 0-100 percent for the UI badge,
+/// rescaled linearly from the measured 0.15-0.35 cosine band (raw CLIP
+/// scores for good matches stay below ~0.35).
+/// Empty when models are not loaded yet (still indexing / no models).
+pub fn clip_search(query: &str) -> Vec<(FileEntry, i32)> {
+    let mut query_vec = {
+        let mut guard = MODELS.lock().unwrap();
+        let Some(models) = guard.as_mut() else {
+            return Vec::new();
+        };
+        match models.embed_text(query) {
+            Ok(v) => v,
+            Err(err) => {
+                eprintln!("clip query embed error: {err}");
+                return Vec::new();
+            }
+        }
+    };
+    l2_normalize(&mut query_vec);
+    let vectors = VECTORS.lock().unwrap();
+    let mut scored: Vec<(f32, &CachedVec)> =
+        vectors.iter().map(|c| (dot(&query_vec, &c.vec), c)).collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored
+        .into_iter()
+        .filter(|(score, _)| *score >= SEMANTIC_MIN_SCORE)
+        .take(SEMANTIC_MAX_HITS)
+        .map(|(score, c)| {
+            (
+                FileEntry {
+                    name: c.name.clone(),
+                    name_lower: c.name_lower.clone(),
+                    path: c.path.clone(),
+                    is_dir: false,
+                    mtime: c.mtime,
+                },
+                // cutoff -> 0%, perfect match -> 100%
+                match_percent(score),
+            )
+        })
         .collect()
 }
 
@@ -103,6 +226,13 @@ pub fn start_indexing() {
             after = chunk.last().unwrap().0.clone();
         }
         EMB_DONE.store(EMB_TOTAL.load(Ordering::Relaxed), Ordering::Relaxed);
+        // Models + vector snapshot go live only now: a query during indexing
+        // would score an incomplete cache. into_query() drops the vision
+        // session here, releasing its ORT arena back to the OS.
+        *MODELS.lock().unwrap() = Some(models.into_query());
+        *VECTORS.lock().unwrap() = load_vectors(&conn);
+        // glibc holds the freed pages in its arenas; give them back to the OS.
+        unsafe { libc::malloc_trim(0) };
     });
 }
 
@@ -168,5 +298,28 @@ mod tests {
     fn blob_roundtrip() {
         let vec: Vec<f32> = [0.0, -1.5, 3.25, f32::MIN_POSITIVE].into();
         assert_eq!(blob_to_vec(&vec_to_blob(&vec)), vec);
+    }
+
+    #[test]
+    fn match_percent_rescales_from_band() {
+        assert_eq!(match_percent(SEMANTIC_MIN_SCORE), 0);
+        assert_eq!(match_percent(SEMANTIC_MAX_SCORE), 100);
+        assert_eq!(match_percent(0.25), 50); // midpoint of 0.15..0.35
+        assert_eq!(match_percent(0.0), 0); // below cutoff clamps, no negatives
+        assert_eq!(match_percent(0.151), 0); // rounds down to 0
+    }
+
+    #[test]
+    fn cosine_scoring_and_threshold() {
+        // Two unnormalized vectors, one query collinear with b.
+        let mut a = vec![1.0, 0.0];
+        let mut b = vec![0.0, 3.0];
+        let mut q = vec![0.0, 0.5];
+        for v in [&mut a, &mut b, &mut q] {
+            l2_normalize(v);
+        }
+        // Same direction => score 1.0; orthogonal => ~0.0, below the threshold.
+        assert!((dot(&q, &b) - 1.0).abs() < 1e-6);
+        assert!(dot(&q, &a) < SEMANTIC_MIN_SCORE);
     }
 }

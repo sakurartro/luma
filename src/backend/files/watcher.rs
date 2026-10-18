@@ -20,6 +20,11 @@ pub fn start_files_watcher(dirs: &[String]) {
         }
 
         fn upsert(path: &std::path::Path, conn: &mut rusqlite::Connection) {
+            // The db lives under the watched tree; writing it would trigger
+            // inotify again and feed the watcher with its own writes forever.
+            if path.starts_with(crate::backend::apps::db_init::config_dir()) {
+                return;
+            }
             if !(path.is_dir() || path.is_file()) {
                 return;
             }

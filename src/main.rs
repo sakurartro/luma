@@ -106,11 +106,13 @@ fn load_files_if_stale(
     });
 }
 
-fn build_file_item(file: &FileEntry) -> FileItem {
+fn build_file_item(file: &FileEntry, match_kind: i32, match_score: i32) -> FileItem {
     FileItem {
         name: file.name.as_str().into(),
         path: file.path.as_str().into(),
         is_dir: file.is_dir,
+        match_kind,
+        match_score,
     }
 }
 
@@ -145,7 +147,7 @@ fn files_view(files: &[FileEntry], hide_patterns: &[String], sort: i32) -> Vec<F
     filtered
         .into_iter()
         .take(MAX_RENDERED)
-        .map(build_file_item)
+        .map(|f| build_file_item(f, clip::MATCH_NAME, 0))
         .collect()
 }
 
@@ -380,11 +382,43 @@ fn main() -> Result<()> {
                     let mut hits =
                         fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str());
                     sort_entries(&mut hits, window.get_files_sort());
-                    let items = hits
-                        .into_iter()
+                    let mut items: Vec<FileItem> = hits
+                        .iter()
                         .take(MAX_RENDERED)
-                        .map(build_file_item)
-                        .collect::<Vec<FileItem>>();
+                        .map(|f| build_file_item(f, clip::MATCH_NAME, 0))
+                        .collect();
+                    // Semantic hits only in relevance order; mtime sorts would
+                    // jumble them (same limitation as fuzzy ranking there).
+                    if window.get_files_sort() == 0 && !query.is_empty() {
+                        let fuzzy_paths: std::collections::HashSet<String> =
+                            hits.iter().map(|f| f.path.clone()).collect();
+                        // CLIP inference (~50-300ms per keystroke) must not
+                        // run on the UI thread: append hits to the already
+                        // shown fuzzy results from a worker thread.
+                        let weak = weak.clone();
+                        let query = query.clone();
+                        let items = items.clone();
+                        let base_len = items.len();
+                        std::thread::spawn(move || {
+                            let clip_items: Vec<FileItem> = clip::clip_search(query.as_str())
+                                .into_iter()
+                                .filter(|(f, _)| !fuzzy_paths.contains(f.path.as_str()))
+                                .take(MAX_RENDERED - base_len.min(MAX_RENDERED))
+                                .map(|(f, score)| build_file_item(&f, clip::MATCH_SEMANTIC, score))
+                                .collect();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(window) = weak.upgrade() {
+                                    // A newer keystroke already replaced the
+                                    // model through the sync path — discard.
+                                    if window.get_input_text() == query {
+                                        let mut all = items;
+                                        all.extend(clip_items);
+                                        window.set_files(Rc::new(VecModel::from(all)).into());
+                                    }
+                                }
+                            });
+                        });
+                    }
                     window.set_files(Rc::new(VecModel::from(items)).into());
                 }
             }
@@ -420,18 +454,52 @@ fn main() -> Result<()> {
                         .collect::<Vec<AppItem>>();
                     window.set_apps(Rc::new(VecModel::from(app_items)).into());
                     let files = all_files.borrow();
-                    let file_items = fuzzy::fuzzy_search(
+                    let fuzzy_hits = fuzzy::fuzzy_search(
                         &files,
                         |file| file.name_lower.as_slice(),
                         query.as_str(),
-                    )
-                    .into_iter()
-                    .filter(|file| {
-                        !hide_patterns.iter().any(|p| file.name.starts_with(p.as_str()))
-                    })
-                    .take(MAX_MIXED)
-                    .map(build_file_item)
-                    .collect::<Vec<FileItem>>();
+                    );
+                    let mut file_items: Vec<FileItem> = fuzzy_hits
+                        .iter()
+                        .filter(|file| {
+                            !hide_patterns.iter().any(|p| file.name.starts_with(p.as_str()))
+                        })
+                        .take(MAX_MIXED)
+                        .map(|f| build_file_item(f, clip::MATCH_NAME, 0))
+                        .collect();
+                    if !query.is_empty() {
+                        let fuzzy_paths: std::collections::HashSet<String> =
+                            fuzzy_hits.iter().map(|f| f.path.clone()).collect();
+                        // CLIP inference off the UI thread, same as
+                        // on_search_files: append to the shown fuzzy results.
+                        let weak = weak.clone();
+                        let query = query.clone();
+                        let hide_patterns = hide_patterns.clone();
+                        let file_items = file_items.clone();
+                        let base_len = file_items.len();
+                        std::thread::spawn(move || {
+                            let clip_items: Vec<FileItem> = clip::clip_search(query.as_str())
+                                .into_iter()
+                                .filter(|(f, _)| !fuzzy_paths.contains(f.path.as_str()))
+                                .filter(|(f, _)| {
+                                    !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str()))
+                                })
+                                .take(MAX_MIXED - base_len.min(MAX_MIXED))
+                                .map(|(f, score)| build_file_item(&f, clip::MATCH_SEMANTIC, score))
+                                .collect();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(window) = weak.upgrade() {
+                                    // A newer keystroke already replaced the
+                                    // model through the sync path — discard.
+                                    if window.get_input_text() == query {
+                                        let mut all = file_items;
+                                        all.extend(clip_items);
+                                        window.set_files(Rc::new(VecModel::from(all)).into());
+                                    }
+                                }
+                            });
+                        });
+                    }
                     window.set_files(Rc::new(VecModel::from(file_items)).into());
                 }
             }

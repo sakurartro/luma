@@ -5,4 +5,4 @@
 mod index;
 mod inference;
 
-pub use index::start_indexing;
+pub use index::{clip_search, MATCH_NAME, MATCH_SEMANTIC, VECTORS, start_indexing};

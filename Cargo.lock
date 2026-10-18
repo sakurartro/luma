@@ -3215,6 +3215,7 @@ dependencies = [
  "anyhow",
  "evalexpr",
  "image",
+ "libc",
  "ndarray",
  "notify",
  "ort",
