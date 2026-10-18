@@ -6,6 +6,8 @@ on:
 
 jobs:
   build:
+    # 24.04, not 22.04: the prebuilt ONNX Runtime (ort-sys) needs glibc >= 2.38
+    # (__isoc23_* symbols), which 22.04's 2.35 linker cannot satisfy.
     runs-on: ubuntu-24.04
     permissions:
       contents: write
