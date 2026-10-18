@@ -1,17 +1,22 @@
 // Воркер индексации: после скана файлов выбирает фото без вектора или с
 // устаревшим mtime, считает CLIP-эмбеддинги и пишет их в embeddings.
 
-use super::inference::{l2_normalize, ClipModels, QueryModels};
+use super::inference::{l2_normalize, model_path, models_dir, ClipModels, QueryModels};
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::files::files_search::FileEntry;
 use anyhow::Result;
 use rusqlite::{params, Connection};
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 // Progress, same polling style as INDEX_* in files_search; no UI hook yet.
 pub static EMB_TOTAL: AtomicUsize = AtomicUsize::new(0);
 pub static EMB_DONE: AtomicUsize = AtomicUsize::new(0);
+
+// Model download progress in bytes; DL_TOTAL 0 = no download in progress.
+pub static DL_TOTAL: AtomicUsize = AtomicUsize::new(0);
+pub static DL_DONE: AtomicUsize = AtomicUsize::new(0);
 
 // Query side of the models, filled at the end of indexing; None until then
 // (or without models/clip/). The vision session is consumed and dropped by
@@ -39,6 +44,66 @@ const SEMANTIC_MAX_SCORE: f32 = 0.35;
 const SEMANTIC_MAX_HITS: usize = 32;
 
 const KIND: &str = "clip";
+
+// HuggingFace export the app expects: quantized ViT-B/32 (~154 MB total).
+const HF_BASE: &str = "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main";
+const MODEL_FILES: [(&str, &str); 3] = [
+    ("tokenizer.json", "tokenizer.json"),
+    ("vision_model_quantized.onnx", "onnx/vision_model_quantized.onnx"),
+    ("text_model_quantized.onnx", "onnx/text_model_quantized.onnx"),
+];
+
+// Download the models once (atomic temp-file rename, so an interrupted run
+// never leaves a truncated "ready" file). False = feature stays off this
+// session; retried on the next start.
+fn ensure_models() -> bool {
+    if MODEL_FILES.iter().all(|(name, _)| model_path(name).exists()) {
+        return true;
+    }
+    DL_TOTAL.store(0, Ordering::Relaxed);
+    DL_DONE.store(0, Ordering::Relaxed);
+    let client = match reqwest::blocking::Client::builder().build() {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!("clip: http client error: {err}");
+            return false;
+        }
+    };
+    if let Err(err) = std::fs::create_dir_all(models_dir()) {
+        eprintln!("clip models dir error: {err}");
+        return false;
+    }
+    for (name, url_path) in MODEL_FILES {
+        let dst = model_path(name);
+        if dst.exists() {
+            continue;
+        }
+        eprintln!("clip: downloading {name}...");
+        if let Err(err) = download(&client, &format!("{HF_BASE}/{url_path}"), &dst) {
+            eprintln!("clip: download {name} failed: {err}");
+            return false;
+        }
+    }
+    true
+}
+
+fn download(client: &reqwest::blocking::Client, url: &str, dst: &std::path::Path) -> Result<()> {
+    let mut resp = client.get(url).send()?.error_for_status()?;
+    DL_TOTAL.fetch_add(resp.content_length().unwrap_or(0) as usize, Ordering::Relaxed);
+    let tmp = dst.with_extension("part");
+    let mut file = std::fs::File::create(&tmp)?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = resp.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n])?;
+        DL_DONE.fetch_add(n, Ordering::Relaxed);
+    }
+    std::fs::rename(&tmp, dst)?;
+    Ok(())
+}
 const CANDIDATE_WHERE: &str = "e.file_path IS NULL AND (f.path LIKE '%.jpg' \
      OR f.path LIKE '%.jpeg' OR f.path LIKE '%.png' OR f.path LIKE '%.webp' \
      OR f.path LIKE '%.gif' OR f.path LIKE '%.bmp')";
@@ -190,10 +255,18 @@ fn upsert_batch(conn: &mut Connection, rows: &[((String, i64), Vec<f32>)]) -> Re
     Ok(())
 }
 
-/// Start the indexing worker in the background; silently no-ops when
-/// models/clip/ is missing.
-pub fn start_indexing() {
+/// Start the indexing worker in the background; gated by the `semantic`
+/// setting (off = the feature costs nothing: no models, no RAM, no CPU).
+/// On first enable the models are downloaded from HuggingFace. Silently
+/// no-ops when the download fails or models/clip/ is broken.
+pub fn start_indexing(semantic: bool) {
+    if !semantic {
+        return;
+    }
     std::thread::spawn(|| {
+        if !ensure_models() {
+            return;
+        }
         let Some(mut models) = ClipModels::load() else { return };
         let Ok(mut conn) = open_conn() else { return };
 

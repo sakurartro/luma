@@ -31,6 +31,7 @@ window right away.
 - Category filter pills
 - Calculator (`2 + 2`) and currency conversion (`100 usd to eur`)
 - File index with a background watcher and scan progress
+- Semantic photo search (CLIP) — opt-in; matching files show a `S(N%)` match-strength badge
 - Configurable colors, search dirs and hide patterns via `settings.json`
 - `Enter` launches the top result
 
@@ -44,6 +45,7 @@ respected) and refreshes in the background when `/usr/share/applications` change
 - `bg`, `surface`, `hover`, `selected`, `border`, `accent`, `text`, `text_dim` — colors, `#RRGGBB` (leading `#` optional). A value that fails to parse renders as black.
 - `search_dirs` — list of paths indexed for file search, `~/` allowed
 - `hide_patterns` — prefix match on file names; the default `["."]` hides all dotfiles
+- `semantic` — semantic photo search by meaning (CLIP embeddings, works best with English queries). `false` by default: the feature then costs nothing — no RAM, no CPU. With `true`, the models (~154 MB) are downloaded from HuggingFace on the next start, photos from `search_dirs` are indexed in the background (progress shown in the launcher), and matching files get a `S(N%)` badge — how strongly the photo matches the query. Toggling it back to `false` stops the feature after a restart; downloaded models and the index stay on disk and are reused if you enable it again.
 
 Full example (the defaults):
 
@@ -52,7 +54,8 @@ Full example (the defaults):
   "bg": "#0E120B", "surface": "#151B10", "hover": "#1E2716", "selected": "#28331C",
   "border": "#2C3620", "accent": "#A9B665", "text": "#E4E7D0", "text_dim": "#7E8A6C",
   "search_dirs": ["~/Documents", "~/Pictures", "~/Desktop"],
-  "hide_patterns": ["."]
+  "hide_patterns": ["."],
+  "semantic": false
 }
 ```
 

@@ -167,6 +167,31 @@ fn update_index_progress(window: &MainWindow) {
     if window.get_index_percent() != percent {
         window.set_index_percent(percent);
     }
+    update_clip_progress(window);
+}
+
+// Model download / photo indexing banner, same polling style as above.
+fn update_clip_progress(window: &MainWindow) {
+    let dl_total = clip::DL_TOTAL.load(Ordering::Relaxed);
+    let dl_done = clip::DL_DONE.load(Ordering::Relaxed);
+    let total = clip::EMB_TOTAL.load(Ordering::Relaxed);
+    let done = clip::EMB_DONE.load(Ordering::Relaxed);
+    let (busy, label, percent) = if dl_total > 0 && dl_done < dl_total {
+        (true, "Downloading models...", (dl_done.min(dl_total) * 100 / dl_total) as i32)
+    } else if total > 0 && done < total {
+        (true, "Indexing photos...", (done.min(total) * 100 / total) as i32)
+    } else {
+        (false, "", 0)
+    };
+    if window.get_clip_busy() != busy {
+        window.set_clip_busy(busy);
+    }
+    if window.get_clip_percent() != percent {
+        window.set_clip_percent(percent);
+    }
+    if window.get_clip_label() != label {
+        window.set_clip_label(label.into());
+    }
 }
 
 // fuzzy name match ∩ selected category; empty category = all
@@ -707,7 +732,8 @@ fn main() -> Result<()> {
                 *INIT_DB.lock().unwrap() = Some(db_state);
 
                 // Own connection: db_state.conn already moved to the UI side.
-                let dirs = settings::load().search_dirs;
+                let st = settings::load();
+                let dirs = st.search_dirs;
                 match open_conn() {
                     Ok(mut conn) => {
                         if let Err(err) = files_search::scan_dirs(&mut conn, &dirs) {
@@ -718,8 +744,8 @@ fn main() -> Result<()> {
                 }
                 files_search::INDEX_DONE.store(true, Ordering::Relaxed);
                 start_files_watcher(&dirs);
-                // Own thread, no-op without models/clip/; runs to completion.
-                clip::start_indexing();
+                // Own thread; no-op when the `semantic` setting is off.
+                clip::start_indexing(st.semantic);
             }
             Err(err) => eprintln!("init error: {err}"),
         }

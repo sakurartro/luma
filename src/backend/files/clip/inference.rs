@@ -19,10 +19,12 @@ const STD: [f32; 3] = [0.26862954, 0.26130258, 0.27577711];
 
 // Модели лежат в $XDG_CONFIG_HOME/luma/models/clip/, рядом с бд и настройками —
 // оттуда их не сносит ни переустановка бинарника, ни релиз-сборка.
-fn model_path(name: &str) -> PathBuf {
-    crate::backend::apps::db_init::config_dir()
-        .join("models/clip")
-        .join(name)
+pub(crate) fn models_dir() -> PathBuf {
+    crate::backend::apps::db_init::config_dir().join("models/clip")
+}
+
+pub(crate) fn model_path(name: &str) -> PathBuf {
+    models_dir().join(name)
 }
 
 // Inference batch: tensor [N,3,224,224] f32 ≈ N*0.6 MB, so 4 ≈ 2.5 MB per
