@@ -1,4 +1,6 @@
 // temporary benchmark harness, delete after measuring
+// includes whole backend but only benchmarks part of it: dead-code warnings here are noise
+#![allow(dead_code, unused_imports)]
 #[path = "../backend/mod.rs"]
 mod backend;
 
