@@ -1,0 +1,33 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "cargo": {
+          "allTargets": false,
+          "features": []
+        },
+        "buildScripts": {
+          "enable": true
+        },
+        "procMacro": {
+          "enable": true
+        },
+        "numThreads": 1,
+        "cachePriming": {
+          "enable": true
+        },
+        "check": {
+          "onSave": false
+        },
+        "diagnostics": {
+          "experimental": {
+            "enable": false
+          }
+        },
+        "files": {
+          "watcher": "client"
+        }
+      }
+    }
+  }
+}

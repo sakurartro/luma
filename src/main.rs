@@ -12,6 +12,7 @@ use backend::files::db_service as files_db;
 use backend::files::files_search::{self, FileEntry};
 use backend::files::watcher::start_files_watcher;
 use backend::general_features::engine;
+use backend::context::context_actions::{self, ContextAction};
 use backend::settings;
 use slint::VecModel;
 use slint::winit_030::WinitWindowAccessor;
@@ -586,6 +587,54 @@ fn main() -> Result<()> {
                     }
                 }
                 Err(err) => eprintln!("failed to open db for launch record: {err}"),
+            }
+        });
+
+        main_window.on_show_context({
+            let weak = main_window.as_weak();
+            move || {
+                // hyprland IPC + /proc reads are fast, but stay off the UI
+                // thread for consistency with run_query.
+                let weak = weak.clone();
+                std::thread::spawn(move || {
+                    if let Some(window) = weak.upgrade() {
+                        window.set_context_result("".into());
+                    }
+                    let items: Vec<ContextItem> = context_actions::cwd_of_previous_window()
+                        .map(|cwd| {
+                            context_actions::detect(&cwd)
+                                .into_iter()
+                                .map(|a| ContextItem {
+                                    label: a.label.as_str().into(),
+                                    command: a.command.as_str().into(),
+                                    dir: a.dir.to_string_lossy().as_ref().into(),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            window.set_context_actions(Rc::new(VecModel::from(items)).into());
+                        }
+                    });
+                });
+            }
+        });
+        main_window.on_run_context_action({
+            let weak = main_window.as_weak();
+            move |item: ContextItem| {
+                let weak = weak.clone();
+                let action = ContextAction {
+                    label: String::new(),
+                    command: item.command.to_string(),
+                    dir: item.dir.to_string().into(),
+                };
+                std::thread::spawn(move || {
+                    let result = context_actions::run(&action).unwrap_or_else(|err| format!("Error: {err}"));
+                    let _ = weak.upgrade_in_event_loop(move |window| {
+                        window.set_context_result(result.into());
+                    });
+                });
             }
         });
 
