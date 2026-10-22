@@ -31,6 +31,7 @@ export component MainWindow inherits Window {
     in-out property <int> files-sort: 0;
     callback show_apps();
     callback show_files();
+    callback show_power_modes();
     callback launch_app(AppItem);
     callback toggle-pin(AppItem);
     callback open_file(FileItem);
@@ -39,6 +40,7 @@ export component MainWindow inherits Window {
     callback search_all(query: string);
     callback filter_category(string);
     callback run_query(string);
+    callback power-action(string);
     callback hide-window();
 
     function activate-mode(m: int) {
@@ -55,6 +57,9 @@ export component MainWindow inherits Window {
             if root.input-text != "" {
                 if m == 1 { root.search_apps(root.input-text); }
                 if m == 2 { root.search_files(root.input-text); }
+            }
+            if m == 3 {
+                root.show_power_modes()
             }
         }
     }
@@ -665,6 +670,44 @@ if root.input-text == "": Text {
                 }
             }
 
+            if root.mode == 3: VerticalLayout {
+                height: 160px;
+
+                HorizontalLayout {
+                    width: parent.width;
+                    spacing: 10px;
+
+                    for opt in [
+                        { action: "poweroff", icon: @image-url("assets/power.svg") },
+                        { action: "reboot",   icon: @image-url("assets/rotate-cw.svg") },
+                        { action: "suspend",  icon: @image-url("assets/moon.svg") },
+                        { action: "lock",     icon: @image-url("assets/lock.svg") },
+                    ]: Rectangle {
+                        horizontal-stretch: 1;
+                        border-radius: 8px;
+                        background: p-touch.has-hover ? root.hover : root.surface;
+                        border-width: 1px;
+                        border-color: p-touch.has-hover ? root.accent : root.border;
+
+                        Image {
+                            source: opt.icon;
+                            colorize: p-touch.has-hover ? root.accent : root.text-dim;
+                            width: 26px;
+                            height: 26px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        p-touch := TouchArea {
+                            width: parent.width;
+                            height: parent.height;
+
+                            clicked => { root.power-action(opt.action); }
+                        }
+                    }
+                }
+            }
+
             // Unified search from the main view: apps first, files below
             if root.mode == 0 && root.input-text != "": VerticalLayout {
                 spacing: 12px;
@@ -808,8 +851,12 @@ if root.input-text == "": Text {
                 border-color: root.border;
 
                 HorizontalLayout {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
                     padding-left: 12px;
-                    padding-right: 12px;
+                    padding-right: 44px;
 
                     Text {
                         text: "Enter: launch  |  Alt+1: apps  |  Alt+2: files  |  Esc: close";
@@ -817,14 +864,33 @@ if root.input-text == "": Text {
                         font-size: 12px;
                         vertical-alignment: center;
                     }
+                }
 
-                    Rectangle { horizontal-stretch: 1; }
+                Rectangle {
+                    x: parent.width - self.width - 8px;
+                    y: (parent.height - self.height) / 2;
+                    width: 22px;
+                    height: 22px;
+                    border-radius: 5px;
+                    background: root.surface;
+                    border-width: 1px;
+                    border-color: root.border;
 
-                    Text {
-                        text: "Luma";
-                        color: root.accent;
-                        font-size: 12px;
-                        vertical-alignment: center;
+                    Image {
+                        source: @image-url("assets/power.svg");
+                        colorize: root.text-dim;
+                        width: 12px;
+                        height: 12px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+
+                        clicked => {
+                            root.activate-mode(3);
+                        }
                     }
                 }
             }
