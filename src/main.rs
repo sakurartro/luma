@@ -326,6 +326,29 @@ fn main() -> Result<()> {
         // Throttle clock for the stale reload above
         let last_files_load: Rc<Cell<Option<std::time::Instant>>> = Rc::new(Cell::new(None));
 
+        main_window.on_power_action(move |action| {
+            let cmd = match action.as_str() {
+                "poweroff" => "systemctl poweroff",
+                "reboot" => "systemctl reboot",
+                "suspend" => "systemctl suspend",
+                "lock" => "loginctl lock-session",
+                other => {
+                    eprintln!("unknown power action: {other}");
+                    return;
+                }
+            };
+            if let Err(err) = Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()
+            {
+                eprintln!("failed to run {cmd}: {err}");
+            }
+        });
+
         main_window.on_show_apps({
             let icon_cache = icon_cache.clone();
             let all_apps = all_apps.clone();
