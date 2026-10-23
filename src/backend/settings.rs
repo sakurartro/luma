@@ -23,6 +23,10 @@ pub struct Settings {
     // are downloaded from HuggingFace on the next start (~154 MB).
     #[serde(default)]
     pub semantic: bool,
+    // OCR text search in images; off by default. When enabled, the models
+    // are downloaded from HuggingFace on the next start (~12 MB).
+    #[serde(default)]
+    pub ocr: bool,
 }
 
 fn default_hide_patterns() -> Vec<String> {
@@ -51,6 +55,7 @@ impl Default for Settings {
             search_dirs: default_search_dirs(),
             hide_patterns: default_hide_patterns(),
             semantic: false,
+            ocr: false,
         }
     }
 }
@@ -94,5 +99,11 @@ mod tests {
     fn template_includes_semantic() {
         let json = serde_json::to_string(&Settings::default()).unwrap();
         assert!(json.contains(r#""semantic":false"#));
+    }
+
+    #[test]
+    fn template_includes_ocr() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains(r#""ocr":false"#));
     }
 }

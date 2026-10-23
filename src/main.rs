@@ -8,6 +8,7 @@ use backend::apps::db_service::{get_category_scores, record_launch, set_pinned};
 use backend::apps::fuzzy;
 use backend::apps::watcher::start_watcher;
 use backend::files::clip;
+use backend::files::ocr;
 use backend::files::db_service as files_db;
 use backend::files::files_search::{self, FileEntry};
 use backend::files::watcher::start_files_watcher;
@@ -116,6 +117,31 @@ fn build_file_item(file: &FileEntry, match_kind: i32, match_score: i32) -> FileI
     }
 }
 
+// Files found by the text on them (OCR) and by meaning (CLIP), in that order:
+// text on the image is the stronger signal. Paths already shown by the fuzzy
+// name search, hidden names and repeats between the two are skipped.
+fn extra_file_items(
+    query: &str,
+    shown: &std::collections::HashSet<String>,
+    hide_patterns: &[String],
+    limit: usize,
+) -> Vec<FileItem> {
+    let ocr_hits = ocr::ocr_search(query).into_iter().map(|(f, score)| (f, ocr::MATCH_OCR, score));
+    let clip_hits =
+        clip::clip_search(query).into_iter().map(|(f, score)| (f, clip::MATCH_SEMANTIC, score));
+    let mut taken = std::collections::HashSet::new();
+    ocr_hits
+        .chain(clip_hits)
+        .filter(|(f, _, _)| {
+            !shown.contains(f.path.as_str())
+                && !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str()))
+                && taken.insert(f.path.clone())
+        })
+        .take(limit)
+        .map(|(f, kind, score)| build_file_item(&f, kind, score))
+        .collect()
+}
+
 // Folders stay in front in every sort mode; ties broken by name.
 // Sort modes: 1 = newest first, 2 = oldest first, 0 = untouched.
 fn sort_entries(entries: &mut [&FileEntry], sort: i32) {
@@ -167,19 +193,28 @@ fn update_index_progress(window: &MainWindow) {
     if window.get_index_percent() != percent {
         window.set_index_percent(percent);
     }
-    update_clip_progress(window);
+    update_model_progress(window);
 }
 
-// Model download / photo indexing banner, same polling style as above.
-fn update_clip_progress(window: &MainWindow) {
+// Model download / photo indexing banner (clip, then ocr), same polling
+// style as above.
+fn update_model_progress(window: &MainWindow) {
     let dl_total = clip::DL_TOTAL.load(Ordering::Relaxed);
     let dl_done = clip::DL_DONE.load(Ordering::Relaxed);
     let total = clip::EMB_TOTAL.load(Ordering::Relaxed);
     let done = clip::EMB_DONE.load(Ordering::Relaxed);
+    let ocr_dl_total = ocr::OCR_DL_TOTAL.load(Ordering::Relaxed);
+    let ocr_dl_done = ocr::OCR_DL_DONE.load(Ordering::Relaxed);
+    let ocr_total = ocr::OCR_TOTAL.load(Ordering::Relaxed);
+    let ocr_done = ocr::OCR_DONE.load(Ordering::Relaxed);
     let (busy, label, percent) = if dl_total > 0 && dl_done < dl_total {
         (true, "Downloading models...", (dl_done.min(dl_total) * 100 / dl_total) as i32)
     } else if total > 0 && done < total {
         (true, "Indexing photos...", (done.min(total) * 100 / total) as i32)
+    } else if ocr_dl_total > 0 && ocr_dl_done < ocr_dl_total {
+        (true, "Downloading OCR models...", (ocr_dl_done.min(ocr_dl_total) * 100 / ocr_dl_total) as i32)
+    } else if ocr_total > 0 && ocr_done < ocr_total {
+        (true, "Recognizing text...", (ocr_done.min(ocr_total) * 100 / ocr_total) as i32)
     } else {
         (false, "", 0)
     };
@@ -418,26 +453,26 @@ fn main() -> Result<()> {
                         let fuzzy_paths: std::collections::HashSet<String> =
                             hits.iter().map(|f| f.path.clone()).collect();
                         // CLIP inference (~50-300ms per keystroke) must not
-                        // run on the UI thread: append hits to the already
-                        // shown fuzzy results from a worker thread.
+                        // run on the UI thread: append OCR/CLIP hits to the
+                        // already shown fuzzy results from a worker thread.
                         let weak = weak.clone();
                         let query = query.clone();
                         let items = items.clone();
                         let base_len = items.len();
                         std::thread::spawn(move || {
-                            let clip_items: Vec<FileItem> = clip::clip_search(query.as_str())
-                                .into_iter()
-                                .filter(|(f, _)| !fuzzy_paths.contains(f.path.as_str()))
-                                .take(MAX_RENDERED - base_len.min(MAX_RENDERED))
-                                .map(|(f, score)| build_file_item(&f, clip::MATCH_SEMANTIC, score))
-                                .collect();
+                            let extra_items = extra_file_items(
+                                query.as_str(),
+                                &fuzzy_paths,
+                                &[],
+                                MAX_RENDERED - base_len.min(MAX_RENDERED),
+                            );
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(window) = weak.upgrade() {
                                     // A newer keystroke already replaced the
                                     // model through the sync path — discard.
                                     if window.get_input_text() == query {
                                         let mut all = items;
-                                        all.extend(clip_items);
+                                        all.extend(extra_items);
                                         window.set_files(Rc::new(VecModel::from(all)).into());
                                     }
                                 }
@@ -495,7 +530,7 @@ fn main() -> Result<()> {
                     if !query.is_empty() {
                         let fuzzy_paths: std::collections::HashSet<String> =
                             fuzzy_hits.iter().map(|f| f.path.clone()).collect();
-                        // CLIP inference off the UI thread, same as
+                        // OCR/CLIP search off the UI thread, same as
                         // on_search_files: append to the shown fuzzy results.
                         let weak = weak.clone();
                         let query = query.clone();
@@ -503,22 +538,19 @@ fn main() -> Result<()> {
                         let file_items = file_items.clone();
                         let base_len = file_items.len();
                         std::thread::spawn(move || {
-                            let clip_items: Vec<FileItem> = clip::clip_search(query.as_str())
-                                .into_iter()
-                                .filter(|(f, _)| !fuzzy_paths.contains(f.path.as_str()))
-                                .filter(|(f, _)| {
-                                    !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str()))
-                                })
-                                .take(MAX_MIXED - base_len.min(MAX_MIXED))
-                                .map(|(f, score)| build_file_item(&f, clip::MATCH_SEMANTIC, score))
-                                .collect();
+                            let extra_items = extra_file_items(
+                                query.as_str(),
+                                &fuzzy_paths,
+                                &hide_patterns,
+                                MAX_MIXED - base_len.min(MAX_MIXED),
+                            );
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(window) = weak.upgrade() {
                                     // A newer keystroke already replaced the
                                     // model through the sync path — discard.
                                     if window.get_input_text() == query {
                                         let mut all = file_items;
-                                        all.extend(clip_items);
+                                        all.extend(extra_items);
                                         window.set_files(Rc::new(VecModel::from(all)).into());
                                     }
                                 }
@@ -746,6 +778,9 @@ fn main() -> Result<()> {
                 start_files_watcher(&dirs);
                 // Own thread; no-op when the `semantic` setting is off.
                 clip::start_indexing(st.semantic);
+                // Waits for the clip worker, so keep it after the call above;
+                // no-op when the `ocr` setting is off.
+                ocr::start_indexing(st.ocr);
             }
             Err(err) => eprintln!("init error: {err}"),
         }

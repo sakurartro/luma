@@ -15,6 +15,12 @@ pub static INDEX_DONE: AtomicBool = AtomicBool::new(true);
 // edit); the UI uses it to know when its in-memory copy is stale.
 pub static DB_VERSION: AtomicUsize = AtomicUsize::new(0);
 
+// SQL predicate for image files in `files f`; shared by the clip and ocr
+// indexing workers.
+pub const IMAGE_WHERE: &str = "(f.path LIKE '%.jpg' OR f.path LIKE '%.jpeg' \
+     OR f.path LIKE '%.png' OR f.path LIKE '%.webp' OR f.path LIKE '%.gif' \
+     OR f.path LIKE '%.bmp')";
+
 #[derive(Debug)]
 pub struct FileEntry {
     pub name: String,
