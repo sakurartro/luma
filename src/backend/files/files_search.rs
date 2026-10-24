@@ -15,6 +15,12 @@ pub static INDEX_DONE: AtomicBool = AtomicBool::new(true);
 // edit); the UI uses it to know when its in-memory copy is stale.
 pub static DB_VERSION: AtomicUsize = AtomicUsize::new(0);
 
+// True once this start's scan finished with every search dir present. The
+// clip/ocr workers prune rows of vanished files only then: after a failed
+// scan or with an unmounted dir, `files` is incomplete and the prune would
+// wipe their whole index.
+pub static SCAN_COMPLETE: AtomicBool = AtomicBool::new(false);
+
 // SQL predicate for image files in `files f`; shared by the clip and ocr
 // indexing workers.
 pub const IMAGE_WHERE: &str = "(f.path LIKE '%.jpg' OR f.path LIKE '%.jpeg' \
@@ -77,9 +83,11 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
     // Insert as we walk: INDEXED must reflect rows actually written, not just
     // collected, otherwise the bar sits at a fake 100% during the insert phase.
     let mut batch: Vec<FileEntry> = Vec::new();
+    let mut all_dirs_present = true;
     for dir in dirs {
         let root = expand_home(dir);
         if !root.is_dir() {
+            all_dirs_present = false;
             continue;
         }
         for entry_result in WalkDir::new(&root) {
@@ -117,6 +125,7 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
 
     INDEX_DONE.store(true, Ordering::Relaxed);
     DB_VERSION.fetch_add(1, Ordering::Relaxed);
+    SCAN_COMPLETE.store(all_dirs_present, Ordering::Relaxed);
 
     Ok(())
 }
@@ -146,6 +155,7 @@ mod tests {
         assert_eq!(INDEXED.load(Ordering::Relaxed), 2);
         assert!(INDEX_DONE.load(Ordering::Relaxed));
         assert_eq!(DB_VERSION.load(Ordering::Relaxed), 1);
+        assert!(SCAN_COMPLETE.load(Ordering::Relaxed));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

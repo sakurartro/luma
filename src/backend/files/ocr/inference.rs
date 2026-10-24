@@ -1,7 +1,7 @@
 // Загрузка ONNX-моделей PaddleOCR (RapidOCR) и прогон det/rec. Пред- и
 // постобработка — в preprocess.rs / postprocess.rs.
 // det: DBNet, выход — sigmoid prob map [1,1,H,W]; rec: CRNN, выход
-// [T,N,C] softmax, CTC-декод (blank = класс 0).
+// softmax [N,T,C] (или [T,N,C]), CTC-декод (blank = класс 0).
 
 use super::postprocess::{ctc_decode, find_boxes};
 use super::preprocess::{crop_boxes, preprocess_det, preprocess_rec_batch};
@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 pub(crate) fn models_dir() -> PathBuf {
     crate::backend::apps::db_init::config_dir().join("models/ocr")
 }
+
+// Кропов на прогон rec (rec_batch_num в PaddleOCR — 6).
+const REC_BATCH: usize = 8;
 
 pub(crate) struct OcrModels {
     det: Session,
@@ -71,8 +74,8 @@ impl OcrModels {
         Some(OcrModels { det, rec, dict })
     }
 
-    // Полный пайплайн по одному файлу: det -> кропы -> rec (одним батчем,
-    // иначе оверхед ORT на рантайм ~300мс на кроп) -> склейка строк сверху
+    // Полный пайплайн по одному файлу: det -> кропы -> rec (батчами, поштучно
+    // оверхед ORT ~300мс на кроп) -> склейка строк сверху
     // вниз. Ошибку отдаёт наверх (воркер решает, ретраить ли).
     pub(crate) fn recognize(&mut self, path: &Path) -> Result<String> {
         let (img, det_input, scale) = preprocess_det(path)?;
@@ -96,16 +99,26 @@ impl OcrModels {
         Ok((flat, h, w))
     }
 
-    // Кропы -> тексты: все паддингом к одной ширине, один прогон rec,
-    // CTC-декод по каждому ряду батча. Пусто, если rec ничего не распознал.
+    // Кропы -> тексты в исходном порядке. Батчи по REC_BATCH: один батч на
+    // все кропы плотного скриншота (500+ боксов) раздувал арену ORT до ГБ.
+    // Сортировка по пропорциям, как в PaddleOCR: в батче меньше паддинга.
+    // Пусто, если rec ничего не распознал.
     fn recognize_batch(&mut self, crops: &[image::RgbImage]) -> Result<Vec<String>> {
-        let input = preprocess_rec_batch(crops)?;
-        let outputs = self.rec.run(ort::inputs!["x" => Tensor::from_array(input)?])?;
-        let (_, value) = outputs.iter().next().ok_or_else(|| anyhow!("нет выходов у rec"))?;
-        // Выход [T,N,C]: C читаем из модели, не гадаем.
-        let (shape, data) = value.try_extract_tensor::<f32>()?;
-        let classes = shape[shape.len() - 1] as usize;
-        Ok(ctc_decode(data, crops.len(), classes, &self.dict))
+        let ratio = |c: &image::RgbImage| c.width() as f32 / c.height() as f32;
+        let mut order: Vec<usize> = (0..crops.len()).collect();
+        order.sort_by(|&a, &b| ratio(&crops[a]).total_cmp(&ratio(&crops[b])));
+        let mut texts = vec![String::new(); crops.len()];
+        for idx in order.chunks(REC_BATCH) {
+            let chunk: Vec<image::RgbImage> = idx.iter().map(|&i| crops[i].clone()).collect();
+            let input = preprocess_rec_batch(&chunk)?;
+            let outputs = self.rec.run(ort::inputs!["x" => Tensor::from_array(input)?])?;
+            let (_, value) = outputs.iter().next().ok_or_else(|| anyhow!("нет выходов у rec"))?;
+            let (shape, data) = value.try_extract_tensor::<f32>()?;
+            for (&i, text) in idx.iter().zip(ctc_decode(data, shape, chunk.len(), &self.dict)) {
+                texts[i] = text;
+            }
+        }
+        Ok(texts)
     }
 }
 

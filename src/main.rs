@@ -71,8 +71,9 @@ const MAX_MIXED: usize = 20;
 // Reload the in-memory file index when the watcher bumped DB_VERSION; keeps
 // per-call cost off repeated searches. The heavy read+sort of ~200k rows runs
 // in a background thread (a synchronous reload here froze the UI for seconds
-// per Alt+2 press), result is applied on the next UI-thread call through
-// FILES_RELOAD. Reloads are throttled and coalesced: the files watcher bumps
+// per Alt+2 press), result is applied through FILES_RELOAD by the
+// refresh_view the thread triggers when done (otherwise the tab stays empty
+// until the next call). Reloads are throttled and coalesced: the files watcher bumps
 // DB_VERSION on every fs event, so presses come in faster than reloads.
 const FILES_RELOAD_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -80,6 +81,7 @@ fn load_files_if_stale(
     all_files: &RefCell<Vec<FileEntry>>,
     files_db_version: &Cell<usize>,
     last_load: &Cell<Option<std::time::Instant>>,
+    weak: slint::Weak<MainWindow>,
 ) {
     // Apply a finished background reload.
     if let Some((version, entries)) = FILES_RELOAD.lock().unwrap().take() {
@@ -100,7 +102,11 @@ fn load_files_if_stale(
     // Own connection (same pattern as on_launch_app); reloads are rare.
     std::thread::spawn(move || {
         match open_conn().and_then(|conn| files_db::get_files(&conn).map_err(anyhow::Error::from)) {
-            Ok(entries) => *FILES_RELOAD.lock().unwrap() = Some((version, entries)),
+            Ok(entries) => {
+                *FILES_RELOAD.lock().unwrap() = Some((version, entries));
+                // Re-run the current view: it picks the result up and redraws.
+                let _ = weak.upgrade_in_event_loop(|window| window.invoke_refresh_view());
+            }
             Err(err) => eprintln!("files refresh error, {err}"),
         }
         FILES_RELOAD_RUNNING.store(false, Ordering::Relaxed);
@@ -421,7 +427,7 @@ fn main() -> Result<()> {
                     // last load (watcher bumps DB_VERSION); otherwise the
                     // in-memory copy is reused — reading all 180k rows per tab
                     // open froze the UI for up to a second.
-                    load_files_if_stale(&all_files, &files_db_version, &last_files_load);
+                    load_files_if_stale(&all_files, &files_db_version, &last_files_load, weak.clone());
                     window.set_files(
                         Rc::new(VecModel::from(files_view(
                             &all_files.borrow(),
@@ -506,7 +512,7 @@ fn main() -> Result<()> {
                             Err(err) => eprintln!("failed to open db for apps refresh: {err}"),
                         }
                     }
-                    load_files_if_stale(&all_files, &files_db_version, &last_files_load);
+                    load_files_if_stale(&all_files, &files_db_version, &last_files_load, weak.clone());
                     let apps = all_apps.borrow();
                     let app_items = filter_items(&apps, query.as_str(), "", &icon_cache)
                         .into_iter()

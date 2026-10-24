@@ -41,6 +41,8 @@ pub fn ensure_models(
         eprintln!("{tag}: downloading {name}...");
         if let Err(err) = download(&client, url, &dst, total, done) {
             eprintln!("{tag}: download {name} failed: {err}");
+            // Otherwise total > done forever and the UI banner never goes away.
+            total.store(0, Ordering::Relaxed);
             return false;
         }
     }

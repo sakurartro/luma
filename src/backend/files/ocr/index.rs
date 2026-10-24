@@ -6,12 +6,12 @@ use super::search;
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::files::clip::CLIP_DONE;
 use crate::backend::files::download::ensure_models;
-use crate::backend::files::files_search::IMAGE_WHERE;
+use crate::backend::files::files_search::{IMAGE_WHERE, SCAN_COMPLETE};
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-// Progress, same polling style as EMB_* in clip; no UI hook yet.
+// Progress, same polling style as EMB_* in clip; shown by main.rs.
 pub static OCR_TOTAL: AtomicUsize = AtomicUsize::new(0);
 pub static OCR_DONE: AtomicUsize = AtomicUsize::new(0);
 
@@ -91,8 +91,10 @@ pub fn start_indexing(ocr: bool) {
         let Some(mut models) = OcrModels::load() else { return };
         let Ok(mut conn) = open_conn() else { return };
 
-        if let Err(err) = delete_orphans(&conn) {
-            eprintln!("ocr orphan cleanup error: {err}");
+        if SCAN_COMPLETE.load(Ordering::Relaxed) {
+            if let Err(err) = delete_orphans(&conn) {
+                eprintln!("ocr orphan cleanup error: {err}");
+            }
         }
 
         // Texts from earlier runs are searchable while the rest is indexed.
@@ -113,13 +115,22 @@ pub fn start_indexing(ocr: bool) {
             let Some((last, _)) = chunk.last() else { break };
             after = last.clone();
             // A failed file is skipped without a row, so the next start retries it.
+            // A panicking one (decoder, ndarray index) gets an empty row instead:
+            // otherwise every start would die on it and never reach the files after.
             let rows: Vec<(String, i64, String)> = chunk
                 .iter()
-                .filter_map(|(path, mtime)| match models.recognize(std::path::Path::new(path)) {
-                    Ok(text) => Some((path.clone(), *mtime, text)),
-                    Err(err) => {
-                        eprintln!("ocr {path}: {err}");
-                        None
+                .filter_map(|(path, mtime)| {
+                    let path_ref = std::path::Path::new(path);
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| models.recognize(path_ref))) {
+                        Ok(Ok(text)) => Some((path.clone(), *mtime, text)),
+                        Ok(Err(err)) => {
+                            eprintln!("ocr {path}: {err}");
+                            None
+                        }
+                        Err(_) => {
+                            eprintln!("ocr {path}: panicked, skipped until it changes");
+                            Some((path.clone(), *mtime, String::new()))
+                        }
                     }
                 })
                 .collect();

@@ -4,7 +4,7 @@
 use super::inference::{l2_normalize, models_dir, ClipModels, QueryModels};
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::files::download::ensure_models;
-use crate::backend::files::files_search::{FileEntry, IMAGE_WHERE};
+use crate::backend::files::files_search::{FileEntry, IMAGE_WHERE, SCAN_COMPLETE};
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -229,8 +229,10 @@ pub fn start_indexing(semantic: bool) {
         let Some(mut models) = ClipModels::load() else { return };
         let Ok(mut conn) = open_conn() else { return };
 
-        if let Err(err) = delete_orphans(&conn) {
-            eprintln!("clip orphan cleanup error: {err}");
+        if SCAN_COMPLETE.load(Ordering::Relaxed) {
+            if let Err(err) = delete_orphans(&conn) {
+                eprintln!("clip orphan cleanup error: {err}");
+            }
         }
 
         let total_sql = format!(

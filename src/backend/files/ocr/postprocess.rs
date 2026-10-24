@@ -68,18 +68,21 @@ pub(super) fn find_boxes(probs: &[f32], h: usize, w: usize) -> Vec<(f32, f32, f3
     boxes
 }
 
-// Выход rec [T,N,C] (плоско) -> N строк. CTC: схлопываем повторы подряд,
+// Выход rec (плоско) -> N строк. CTC: схлопываем повторы подряд,
 // класс 0 — blank; 1..=dict.len() — словарь; хвост за словарём (97-й класс
 // при 95 строках словаря) — пробел.
-pub(super) fn ctc_decode(data: &[f32], n: usize, classes: usize, dict: &[String]) -> Vec<String> {
-    let t = data.len() / (classes * n);
+// Раскладку берём из формы: экспорт PaddleOCR — [N,T,C], но бывает и [T,N,C];
+// при N == T они неразличимы, тогда [N,T,C] как у PaddleOCR.
+pub(super) fn ctc_decode(data: &[f32], shape: &[i64], n: usize, dict: &[String]) -> Vec<String> {
+    let classes = shape.last().copied().unwrap_or(0).max(1) as usize;
+    let t = data.len() / (classes * n.max(1));
+    let batch_first = shape.first().is_some_and(|&d| d as usize == n);
     let mut texts = Vec::with_capacity(n);
     for row in 0..n {
         let mut text = String::new();
         let mut prev = 0usize;
         for i in 0..t {
-            // Смещение ряда внутри [T,N,C]: ряд row, шаг i -> data[(i*n + row)*classes].
-            let base = (i * n + row) * classes;
+            let base = if batch_first { (row * t + i) * classes } else { (i * n + row) * classes };
             let r = &data[base..base + classes];
             let (best, _) = r
                 .iter()
@@ -97,4 +100,33 @@ pub(super) fn ctc_decode(data: &[f32], n: usize, classes: usize, dict: &[String]
         texts.push(text);
     }
     texts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // One-hot logits for the class sequences of each row, in the given layout.
+    fn logits(rows: &[[usize; 3]], classes: usize, batch_first: bool) -> Vec<f32> {
+        let (n, t) = (rows.len(), 3);
+        let mut data = vec![0.0; n * t * classes];
+        for (row, seq) in rows.iter().enumerate() {
+            for (i, &class) in seq.iter().enumerate() {
+                let base = if batch_first { (row * t + i) * classes } else { (i * n + row) * classes };
+                data[base + class] = 1.0;
+            }
+        }
+        data
+    }
+
+    #[test]
+    fn ctc_decode_reads_layout_from_shape() {
+        let dict: Vec<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
+        // classes: 0 blank, 1 a, 2 b, 3 space; repeats collapse, blank splits
+        let rows = [[1, 1, 2], [2, 0, 2]];
+        let want = ["ab", "bb"];
+        assert_eq!(ctc_decode(&logits(&rows, 4, true), &[2, 3, 4], 2, &dict), want);
+        assert_eq!(ctc_decode(&logits(&rows, 4, false), &[3, 2, 4], 2, &dict), want);
+        assert_eq!(ctc_decode(&logits(&[[3, 1, 0]], 4, true), &[1, 3, 4], 1, &dict), [" a"]);
+    }
 }

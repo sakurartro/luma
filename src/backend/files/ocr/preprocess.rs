@@ -17,8 +17,10 @@ const DET_LIMIT: u32 = 960;
 // rec: вход [1,3,48,W].
 const REC_HEIGHT: u32 = 48;
 const REC_MIN_W: u32 = 16;
-// Стандартная ширина rec-входа PP-OCR: длинные строки сжимаются до неё.
-const REC_MAX_W: u32 = 320;
+// Ширина батча растёт по самой длинной строке, как в PaddleOCR (max_wh_ratio):
+// сжатие строки до 320 оставляло ~1 шаг CTC на 2-3 символа. Предел ~50:1
+// только от взрыва памяти на мусорных боксах.
+const REC_MAX_W: u32 = 2400;
 
 // Декод -> RGB-картинка + вход det [1,3,H,W] + масштаб (вход/исходник).
 pub(super) fn preprocess_det(path: &Path) -> Result<(image::RgbImage, Array4<f32>, f32)> {

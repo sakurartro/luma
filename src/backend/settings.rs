@@ -64,7 +64,8 @@ fn settings_path() -> PathBuf {
     config_dir().join("settings.json")
 }
 
-/// Missing file → defaults + write a template to edit; broken file → defaults, file kept.
+/// Missing file → defaults + write a template to edit; broken file → defaults, file kept;
+/// fields added since the file was written → appended with their defaults.
 pub fn load() -> Settings {
     let path = settings_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -74,10 +75,31 @@ pub fn load() -> Settings {
         }
         return s;
     };
-    serde_json::from_str(&text).unwrap_or_else(|err| {
-        eprintln!("settings.json parse error, using defaults: {err}");
-        Settings::default()
-    })
+    match serde_json::from_str::<Settings>(&text) {
+        Ok(s) => {
+            if let Some(json) = with_missing_fields(&text, &s) {
+                let _ = std::fs::write(&path, json);
+            }
+            s
+        }
+        Err(err) => {
+            eprintln!("settings.json parse error, using defaults: {err}");
+            Settings::default()
+        }
+    }
+}
+
+// New options (like `ocr`) must show up in an existing file to be found:
+// the user's JSON plus the fields it lacks; None when nothing is missing.
+// User values and unknown keys are kept.
+fn with_missing_fields(text: &str, s: &Settings) -> Option<String> {
+    let serde_json::Value::Object(mut user) = serde_json::from_str(text).ok()? else { return None };
+    let serde_json::Value::Object(full) = serde_json::to_value(s).ok()? else { return None };
+    let before = user.len();
+    for (key, value) in full {
+        user.entry(key).or_insert(value);
+    }
+    (user.len() != before).then(|| serde_json::to_string_pretty(&user).ok()).flatten()
 }
 
 /// "#RRGGBB" (leading '#' optional); anything else → black.
@@ -99,6 +121,22 @@ mod tests {
     fn template_includes_semantic() {
         let json = serde_json::to_string(&Settings::default()).unwrap();
         assert!(json.contains(r#""semantic":false"#));
+    }
+
+    #[test]
+    fn missing_fields_are_added_and_user_values_kept() {
+        let text = r##"{"bg": "#111111", "surface": "#000000", "hover": "#000000", "selected": "#000000",
+            "border": "#000000", "accent": "#000000", "text": "#000000", "text_dim": "#000000",
+            "semantic": true, "custom": 1}"##;
+        let s: Settings = serde_json::from_str(text).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&with_missing_fields(text, &s).unwrap()).unwrap();
+        assert_eq!(json["ocr"], false);
+        assert_eq!(json["semantic"], true);
+        assert_eq!(json["bg"], "#111111");
+        assert_eq!(json["custom"], 1);
+        // complete file -> no rewrite
+        let full = serde_json::to_string(&s).unwrap();
+        assert!(with_missing_fields(&full, &s).is_none());
     }
 
     #[test]

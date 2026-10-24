@@ -63,6 +63,20 @@ export component MainWindow inherits Window {
     public function focus-input() {
         search-input.focus();
     }
+    // Re-run the current files view; main.rs calls it when a background
+    // files reload has finished.
+    public function refresh-view() {
+        if root.mode == 0 && root.input-text != "" {
+            root.search_all(root.input-text);
+        }
+        if root.mode == 2 {
+            if root.input-text != "" {
+                root.search_files(root.input-text);
+            } else {
+                root.show_files();
+            }
+        }
+    }
     public function reset-view() {
         root.mode = 0;
         root.selected-category = "";
