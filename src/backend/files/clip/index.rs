@@ -1,13 +1,13 @@
 // Воркер индексации: после скана файлов выбирает фото без вектора или с
 // устаревшим mtime, считает CLIP-эмбеддинги и пишет их в embeddings.
 
-use super::inference::{l2_normalize, model_path, models_dir, ClipModels, QueryModels};
+use super::inference::{l2_normalize, models_dir, ClipModels, QueryModels};
 use crate::backend::apps::db_init::open_conn;
-use crate::backend::files::files_search::FileEntry;
+use crate::backend::files::download::ensure_models;
+use crate::backend::files::files_search::{FileEntry, IMAGE_WHERE, SCAN_COMPLETE};
 use anyhow::Result;
 use rusqlite::{params, Connection};
-use std::io::{Read, Write};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 // Progress, same polling style as INDEX_* in files_search; no UI hook yet.
@@ -46,67 +46,12 @@ const SEMANTIC_MAX_HITS: usize = 32;
 const KIND: &str = "clip";
 
 // HuggingFace export the app expects: quantized ViT-B/32 (~154 MB total).
-const HF_BASE: &str = "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main";
 const MODEL_FILES: [(&str, &str); 3] = [
-    ("tokenizer.json", "tokenizer.json"),
-    ("vision_model_quantized.onnx", "onnx/vision_model_quantized.onnx"),
-    ("text_model_quantized.onnx", "onnx/text_model_quantized.onnx"),
+    ("tokenizer.json", "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/tokenizer.json"),
+    ("vision_model_quantized.onnx", "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_quantized.onnx"),
+    ("text_model_quantized.onnx", "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/text_model_quantized.onnx"),
 ];
 
-// Download the models once (atomic temp-file rename, so an interrupted run
-// never leaves a truncated "ready" file). False = feature stays off this
-// session; retried on the next start.
-fn ensure_models() -> bool {
-    if MODEL_FILES.iter().all(|(name, _)| model_path(name).exists()) {
-        return true;
-    }
-    DL_TOTAL.store(0, Ordering::Relaxed);
-    DL_DONE.store(0, Ordering::Relaxed);
-    let client = match reqwest::blocking::Client::builder().build() {
-        Ok(client) => client,
-        Err(err) => {
-            eprintln!("clip: http client error: {err}");
-            return false;
-        }
-    };
-    if let Err(err) = std::fs::create_dir_all(models_dir()) {
-        eprintln!("clip models dir error: {err}");
-        return false;
-    }
-    for (name, url_path) in MODEL_FILES {
-        let dst = model_path(name);
-        if dst.exists() {
-            continue;
-        }
-        eprintln!("clip: downloading {name}...");
-        if let Err(err) = download(&client, &format!("{HF_BASE}/{url_path}"), &dst) {
-            eprintln!("clip: download {name} failed: {err}");
-            return false;
-        }
-    }
-    true
-}
-
-fn download(client: &reqwest::blocking::Client, url: &str, dst: &std::path::Path) -> Result<()> {
-    let mut resp = client.get(url).send()?.error_for_status()?;
-    DL_TOTAL.fetch_add(resp.content_length().unwrap_or(0) as usize, Ordering::Relaxed);
-    let tmp = dst.with_extension("part");
-    let mut file = std::fs::File::create(&tmp)?;
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let n = resp.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        file.write_all(&buf[..n])?;
-        DL_DONE.fetch_add(n, Ordering::Relaxed);
-    }
-    std::fs::rename(&tmp, dst)?;
-    Ok(())
-}
-const CANDIDATE_WHERE: &str = "e.file_path IS NULL AND (f.path LIKE '%.jpg' \
-     OR f.path LIKE '%.jpeg' OR f.path LIKE '%.png' OR f.path LIKE '%.webp' \
-     OR f.path LIKE '%.gif' OR f.path LIKE '%.bmp')";
 // DB rows read per pass; a multiple of INFERENCE_BATCH.
 const DB_CHUNK: usize = 256;
 
@@ -221,7 +166,7 @@ fn fetch_candidates(conn: &Connection, after: &str, limit: i64) -> Result<Vec<(S
     let sql = format!(
         "SELECT f.path, f.mtime FROM files f
          LEFT JOIN embeddings e ON e.file_path = f.path AND e.kind = '{KIND}' AND e.mtime = f.mtime
-         WHERE {CANDIDATE_WHERE} AND f.path > ?1
+         WHERE e.file_path IS NULL AND {IMAGE_WHERE} AND f.path > ?1
          ORDER BY f.path LIMIT ?2"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -255,29 +200,45 @@ fn upsert_batch(conn: &mut Connection, rows: &[((String, i64), Vec<f32>)]) -> Re
     Ok(())
 }
 
+// Set once the clip worker is over for this session (finished, disabled,
+// failed or panicked); the ocr worker waits for it so the two ONNX sessions
+// never live and compete for the CPU at the same time.
+pub static CLIP_DONE: AtomicBool = AtomicBool::new(false);
+
+struct SetDoneOnDrop;
+impl Drop for SetDoneOnDrop {
+    fn drop(&mut self) {
+        CLIP_DONE.store(true, Ordering::Release);
+    }
+}
+
 /// Start the indexing worker in the background; gated by the `semantic`
 /// setting (off = the feature costs nothing: no models, no RAM, no CPU).
 /// On first enable the models are downloaded from HuggingFace. Silently
 /// no-ops when the download fails or models/clip/ is broken.
 pub fn start_indexing(semantic: bool) {
     if !semantic {
+        CLIP_DONE.store(true, Ordering::Release);
         return;
     }
     std::thread::spawn(|| {
-        if !ensure_models() {
+        let _done = SetDoneOnDrop;
+        if !ensure_models("clip", &models_dir(), &MODEL_FILES, &DL_TOTAL, &DL_DONE) {
             return;
         }
         let Some(mut models) = ClipModels::load() else { return };
         let Ok(mut conn) = open_conn() else { return };
 
-        if let Err(err) = delete_orphans(&conn) {
-            eprintln!("clip orphan cleanup error: {err}");
+        if SCAN_COMPLETE.load(Ordering::Relaxed) {
+            if let Err(err) = delete_orphans(&conn) {
+                eprintln!("clip orphan cleanup error: {err}");
+            }
         }
 
         let total_sql = format!(
             "SELECT COUNT(*) FROM files f LEFT JOIN embeddings e
              ON e.file_path = f.path AND e.kind = '{KIND}' AND e.mtime = f.mtime
-             WHERE {CANDIDATE_WHERE}"
+             WHERE e.file_path IS NULL AND {IMAGE_WHERE}"
         );
         let total = conn.query_row(&total_sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
         EMB_TOTAL.store(total.max(0) as usize, Ordering::Relaxed);

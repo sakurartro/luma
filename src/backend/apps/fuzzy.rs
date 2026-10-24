@@ -24,6 +24,12 @@ pub fn fuzzy_search<'a, T>(
     scored.into_iter().map(|(item, _)| item).collect()
 }
 
+/// True when `query` (lowercase) is a fuzzy subsequence of `name` (lowercase);
+/// the same rule fuzzy_search uses, for callers that count matches themselves.
+pub fn is_match(name: &[char], query: &[char]) -> bool {
+    score_match(name, query).is_some()
+}
+
 // ponytail: greedy left-to-right subsequence match with simple scoring;
 // swap for nucleo if file search needs better ranking
 fn score_match(name: &[char], query: &[char]) -> Option<i32> {

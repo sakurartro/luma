@@ -101,6 +101,15 @@ impl DbState {
                 vec BLOB NOT NULL,
                 PRIMARY KEY (file_path, kind)
             );
+
+            -- OCR text of images. No FK to files(path) for the same reason
+            -- as embeddings: the scan wipes files on every start. An empty
+            -- text is a valid row (image processed, no text found).
+            CREATE TABLE IF NOT EXISTS ocr_text (
+                file_path TEXT PRIMARY KEY,
+                mtime INTEGER NOT NULL DEFAULT 0,
+                text TEXT NOT NULL
+            );
             "#,
         )?;
 

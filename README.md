@@ -46,6 +46,7 @@ respected) and refreshes in the background when `/usr/share/applications` change
 - `search_dirs` — list of paths indexed for file search, `~/` allowed
 - `hide_patterns` — prefix match on file names; the default `["."]` hides all dotfiles
 - `semantic` — semantic photo search by meaning (CLIP embeddings, works best with English queries). `false` by default: the feature then costs nothing — no RAM, no CPU. With `true`, the models (~154 MB) are downloaded from HuggingFace on the next start, photos from `search_dirs` are indexed in the background (progress shown in the launcher), and matching files get a `S(N%)` badge — how strongly the photo matches the query. Toggling it back to `false` stops the feature after a restart; downloaded models and the index stay on disk and are reused if you enable it again.
+- `ocr` — search images by the text on them (PaddleOCR, English). `false` by default: the feature then costs nothing — no RAM, no CPU. With `true`, the models (~12 MB) are downloaded from HuggingFace on the next start, images from `search_dirs` are recognized in the background after the semantic indexing (if enabled) finishes, and matching files get a `T(N%)` badge — the share of the image's words that fuzzy-matched the query. Toggling it back to `false` stops the feature after a restart; downloaded models and recognized text stay on disk.
 
 Full example (the defaults):
 
@@ -55,7 +56,8 @@ Full example (the defaults):
   "border": "#2C3620", "accent": "#A9B665", "text": "#E4E7D0", "text_dim": "#7E8A6C",
   "search_dirs": ["~/Documents", "~/Pictures", "~/Desktop"],
   "hide_patterns": ["."],
-  "semantic": false
+  "semantic": false,
+  "ocr": false
 }
 ```
 

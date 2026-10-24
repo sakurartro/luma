@@ -14,9 +14,10 @@ export struct FileItem {
     name: string,
     path: string,
     is-dir: bool,
-    // 0 = matched by name (default, no badge), 1 = semantic (CLIP)
+    // 0 = matched by name (default, no badge), 1 = semantic (CLIP),
+    // 2 = by the text on the image (OCR)
     match-kind: int,
-    // match strength in 0-100 percent, only for match-kind 1
+    // match strength in 0-100 percent, only for match-kind 1 and 2
     match-score: int,
 }
 
@@ -66,6 +67,20 @@ export component MainWindow inherits Window {
 
     public function focus-input() {
         search-input.focus();
+    }
+    // Re-run the current files view; main.rs calls it when a background
+    // files reload has finished.
+    public function refresh-view() {
+        if root.mode == 0 && root.input-text != "" {
+            root.search_all(root.input-text);
+        }
+        if root.mode == 2 {
+            if root.input-text != "" {
+                root.search_files(root.input-text);
+            } else {
+                root.show_files();
+            }
+        }
     }
     public function reset-view() {
         root.mode = 0;
@@ -635,8 +650,9 @@ if root.input-text == "": Text {
                                 overflow: elide;
                             }
 
-                            // How the file matched: S(87%) = semantic (CLIP).
-                            if file.match-kind == 1: Rectangle {
+                            // How the file matched: S(87%) = semantic (CLIP), T(40%) = text on the
+// image (OCR).
+                            if file.match-kind == 1 || file.match-kind == 2: Rectangle {
                                 height: 14px;
                                 x: parent.width - self.width - 2px;
                                 y: 2px;
@@ -648,7 +664,7 @@ if root.input-text == "": Text {
                                     padding-right: 5px;
 
                                     Text {
-                                        text: "S(" + file.match-score + "%)";
+                                        text: (file.match-kind == 2 ? "T(" : "S(") + file.match-score + "%)";
                                         color: root.surface;
                                         font-size: 10px;
                                         vertical-alignment: center;
@@ -816,9 +832,10 @@ if root.input-text == "": Text {
                                     horizontal-stretch: 1;
                                 }
 
-                                // How the file matched: S(87%) = semantic (CLIP).
-                                if file.match-kind == 1: Text {
-                                    text: "S(" + file.match-score + "%)";
+                                // How the file matched: S(87%) = semantic (CLIP), T(40%) = text on the
+// image (OCR).
+                                if file.match-kind == 1 || file.match-kind == 2: Text {
+                                    text: (file.match-kind == 2 ? "T(" : "S(") + file.match-score + "%)";
                                     color: root.accent;
                                     font-size: 11px;
                                     width: 46px;
