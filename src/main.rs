@@ -2,7 +2,7 @@ slint::include_modules!();
 mod backend;
 mod toggle;
 use anyhow::Result;
-use backend::apps::apps_search::{App, Apps};
+use backend::apps::apps_search::{exec_args, App, Apps};
 use backend::apps::db_init::{DbState, open_conn};
 use backend::apps::db_service::{get_category_scores, record_launch, set_pinned};
 use backend::apps::fuzzy;
@@ -464,9 +464,14 @@ fn main() -> Result<()> {
         });
         main_window.on_search_files({
             let all_files = all_files.clone();
+            let files_db_version = files_db_version.clone();
+            let last_files_load = last_files_load.clone();
             let weak = main_window.as_weak();
             move |query: slint::SharedString| {
                 if let Some(window) = weak.upgrade() {
+                    // refresh_view lands here after a background reload in
+                    // mode 2 with text — pick the finished result up.
+                    load_files_if_stale(&all_files, &files_db_version, &last_files_load, weak.clone());
                     let files = all_files.borrow();
                     let mut hits =
                         fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str());
@@ -622,14 +627,13 @@ fn main() -> Result<()> {
             });
         });
         main_window.on_launch_app(|app| {
-            let mut parts = app.command.split_whitespace();
-
-            let Some(program) = parts.next() else {
+            let args = exec_args(&app.command);
+            let Some((program, rest)) = args.split_first() else {
                 return;
             };
 
             if let Err(err) = Command::new(program)
-                .args(parts)
+                .args(rest)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .process_group(0)
