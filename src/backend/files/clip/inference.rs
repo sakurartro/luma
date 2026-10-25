@@ -71,7 +71,7 @@ impl ClipModels {
         // batches are the heavy part of indexing and would otherwise
         // saturate all cores; the text side runs one tiny query embedding.
         let build = |model: &PathBuf, threads: usize| {
-            let mut builder = Session::builder(&env)?
+            let builder = Session::builder(&env)?
                 .with_optimization_level(GraphOptimizationLevel::Level3)
                 .unwrap_or_else(|e| e.recover())
                 // the batch size varies (short last group), the pattern
