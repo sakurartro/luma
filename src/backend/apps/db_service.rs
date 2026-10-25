@@ -138,8 +138,34 @@ pub fn record_launch(conn: &mut Connection, path: &str) -> Result<()> {
 }
 
 
-pub fn del_app(conn: &mut Connection, path: String) -> Result<()> {
-    conn.execute("DELETE FROM applications WHERE app_path = ?", [path],)?;
+pub fn app_paths(conn: &mut Connection) -> Result<Vec<String>> {
+    let paths = conn
+        .prepare("SELECT app_path FROM applications")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(paths)
+}
+
+/// One transaction. A row with an heir (the override shadowing it) is moved
+/// to the heir's path: same id, so pin, launch and category stats survive.
+/// Rows without an heir, or whose heir already has a row, are deleted.
+pub fn prune_apps(conn: &mut Connection, stale: &[(String, Option<String>)]) -> Result<()> {
+    let tx = conn.transaction()?;
+    for (path, heir) in stale {
+        let moved = match heir {
+            Some(heir) => {
+                tx.execute(
+                    "UPDATE OR IGNORE applications SET app_path = ?2 WHERE app_path = ?1",
+                    params![path, heir],
+                )? > 0
+            }
+            None => false,
+        };
+        if !moved {
+            tx.execute("DELETE FROM applications WHERE app_path = ?1", [path])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 
