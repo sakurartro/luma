@@ -43,12 +43,9 @@ impl OcrModels {
                 return None;
             }
         }
-        let env = match ort::environment::init().build() {
-            Ok(env) => env,
-            Err(err) => {
-                eprintln!("ocr disabled, ort init failed: {err}");
-                return None;
-            }
+        let Some(env) = crate::backend::files::ort_env() else {
+            eprintln!("ocr disabled: ort init failed");
+            return None;
         };
         // memory_pattern off: размеры входа меняются от картинки к картинке,
         // паттерн, записанный под один размер, раздувает арену для других.

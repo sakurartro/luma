@@ -60,12 +60,9 @@ impl ClipModels {
                 return None;
             }
         }
-        let env = match ort::environment::init().build() {
-            Ok(env) => env,
-            Err(err) => {
-                eprintln!("clip disabled, ort init failed: {err}");
-                return None;
-            }
+        let Some(env) = crate::backend::files::ort_env() else {
+            eprintln!("clip disabled: ort init failed");
+            return None;
         };
         // `threads` limits intra-op parallelism; 0 = ORT default. Vision
         // batches are the heavy part of indexing and would otherwise
