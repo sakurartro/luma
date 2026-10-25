@@ -59,6 +59,58 @@ fn desktop_id(dir: &Path, path: &Path) -> String {
         .replace('/', "-")
 }
 
+/// Splits an Exec value into argv per the Desktop Entry spec: unquoted
+/// whitespace separates args, inside "..." `\"` `\`` `\$` `\\` are escapes.
+/// Field codes and flatpak's @@ markers are dropped — we never pass files/URLs.
+/// shortcut: the string-level unescape (`\\` → `\`, `\s`) that the spec applies
+/// before quoting is skipped, upgrade if a .desktop file needs it.
+pub fn exec_args(exec: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut arg = String::new();
+    let (mut in_arg, mut quoted) = (false, false);
+    let mut chars = exec.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                in_arg = true;
+            }
+            '\\' if quoted => match chars.next() {
+                Some(next @ ('"' | '`' | '$' | '\\')) => arg.push(next),
+                Some(next) => {
+                    arg.push('\\');
+                    arg.push(next);
+                }
+                None => arg.push('\\'),
+            },
+            c if c.is_whitespace() && !quoted => {
+                if in_arg {
+                    args.push(std::mem::take(&mut arg));
+                    in_arg = false;
+                }
+            }
+            c => {
+                arg.push(c);
+                in_arg = true;
+            }
+        }
+    }
+    if in_arg {
+        args.push(arg);
+    }
+    args.into_iter()
+        .filter(|arg| {
+            !matches!(
+                arg.as_str(),
+                "%f" | "%F" | "%u" | "%U" | "%i" | "%c" | "%k"
+                    | "%d" | "%D" | "%n" | "%N" | "%v" | "%m"
+                    | "@@" | "@@u" | "@@f"
+            )
+        })
+        .map(|arg| arg.replace("%%", "%"))
+        .collect()
+}
+
 /// Existing applications dirs, highest priority first.
 pub fn app_dirs() -> Vec<PathBuf> {
     data_dirs()
@@ -196,14 +248,9 @@ impl Apps {
                 .find_map(|line| line.strip_prefix("Name="));
             let command = desktop_entry
                 .iter()
+                // raw Exec value; exec_args() splits it at launch time
                 .find_map(|line| line.strip_prefix("Exec="))
-                // strip desktop-entry field codes (%u %F %i ...) — we never pass files/URLs
-                .map(|exec| {
-                    exec.split_whitespace()
-                        .filter(|arg| !(arg.len() == 2 && arg.starts_with('%')))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                });
+                .map(String::from);
 
             let icon = desktop_entry
                 .iter()
@@ -324,5 +371,18 @@ mod tests {
         let mut expected = vec![system.join("baz.desktop"), user.join("foo.desktop"), user.join("kde/bar.desktop")];
         expected.sort();
         assert_eq!(paths, expected);
+    }
+
+    #[test]
+    fn exec_args_follows_spec() {
+        assert_eq!(exec_args("firefox %u"), ["firefox"]);
+        assert_eq!(exec_args(r#"sh -c "echo hi there""#), ["sh", "-c", "echo hi there"]);
+        assert_eq!(exec_args(r#"sh -c "echo \"hi\" \$HOME \\ \`x\`""#), ["sh", "-c", r#"echo "hi" $HOME \ `x`"#]);
+        assert_eq!(exec_args("printf 100%% %%u"), ["printf", "100%", "%u"]);
+        assert_eq!(exec_args(r#""/opt/My App/app" """#), ["/opt/My App/app", ""]);
+        assert_eq!(
+            exec_args("/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=firefox --file-forwarding org.mozilla.firefox @@u %u @@"),
+            ["/usr/bin/flatpak", "run", "--branch=stable", "--arch=x86_64", "--command=firefox", "--file-forwarding", "org.mozilla.firefox"]
+        );
     }
 }

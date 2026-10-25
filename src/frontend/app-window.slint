@@ -525,7 +525,6 @@ if root.input-text == "": Text {
                 }
 
                 SelScrollView {
-                    width: parent.width;
                     height: parent.height;
                     // 90px tile + 10px spacing per column, 92px + 10px per row
                     property <int> grid-cols: max(1, floor((apps-grid.width + 10px) / 100px));
@@ -665,7 +664,6 @@ if root.input-text == "": Text {
                 }
 
                 SelScrollView {
-                    width: parent.width;
                     height: parent.height;
                     property <int> grid-cols: max(1, floor((files-grid.width + 10px) / 100px));
                     item-y: floor(root.sel / root.cols) * 102px;
@@ -766,7 +764,6 @@ if root.input-text == "": Text {
                 height: 160px;
 
                 HorizontalLayout {
-                    width: parent.width;
                     spacing: 10px;
 
                     for opt[i] in root.power-opts: Rectangle {
