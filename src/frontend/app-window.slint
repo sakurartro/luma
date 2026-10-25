@@ -21,6 +21,26 @@ export struct FileItem {
     match-score: int,
 }
 
+// ScrollView that scrolls the keyboard-selected item into view when item-y
+// changes; item-y < 0 means the selection is not in this view.
+component SelScrollView inherits ScrollView {
+    in property <length> item-y: -1px;
+    in property <length> item-height;
+    @children
+
+    changed item-y => {
+        if self.item-y < 0 {
+            return;
+        }
+        if self.item-y < -self.content-y {
+            self.content-y = -self.item-y;
+        }
+        if self.item-y + self.item-height > self.visible-height - self.content-y {
+            self.content-y = self.visible-height - self.item-y - self.item-height;
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     in property <[AppItem]> apps;
     in property <[FileItem]> files;
@@ -44,7 +64,29 @@ export component MainWindow inherits Window {
     callback power-action(string);
     callback hide-window();
 
+    // keyboard selection; in mode 0 it runs through apps first, then files
+    in-out property <int> sel: 0;
+    // columns of the apps/files grid, pushed from the grid itself
+    property <int> cols: 1;
+    property <int> sel-len: root.mode == 0 ? root.apps.length + root.files.length
+        : root.mode == 1 ? root.apps.length
+        : root.mode == 2 ? root.files.length
+        : root.power-opts.length;
+    property <[{ action: string, icon: image }]> power-opts: [
+        { action: "poweroff", icon: @image-url("assets/power.svg") },
+        { action: "reboot",   icon: @image-url("assets/rotate-cw.svg") },
+        { action: "suspend",  icon: @image-url("assets/moon.svg") },
+        { action: "lock",     icon: @image-url("assets/lock.svg") },
+    ];
+
+    // also clamps, since the models can shrink when async results arrive
+    function move-sel(d: int) {
+        root.sel = max(0, min(root.sel-len - 1, root.sel + d));
+    }
+
     function activate-mode(m: int) {
+        // power mode starts with nothing selected: a stray Enter must not power off
+        root.sel = m == 3 && root.mode != 3 ? -1 : 0;
         if root.mode == m {
             root.mode = 0;
         } else {
@@ -84,6 +126,7 @@ export component MainWindow inherits Window {
     }
     public function reset-view() {
         root.mode = 0;
+        root.sel = 0;
         root.selected-category = "";
     }
     in-out property <string> query-result;
@@ -175,9 +218,19 @@ export component MainWindow inherits Window {
                                     root.activate-mode(2);
                                     return accept;
                                 }
+                                if event.text == Key.DownArrow || event.text == Key.UpArrow {
+                                    root.move-sel((event.text == Key.DownArrow ? 1 : -1) * (root.mode == 1 || root.mode == 2 ? root.cols : 1));
+                                    return accept;
+                                }
+                                // in mode 0 Left/Right keep moving the text cursor
+                                if root.mode != 0 && (event.text == Key.RightArrow || event.text == Key.LeftArrow) {
+                                    root.move-sel(event.text == Key.RightArrow ? 1 : -1);
+                                    return accept;
+                                }
                                 return reject;
                             }
                             edited => {
+                                root.sel = root.mode == 3 ? -1 : 0;
                                 if root.mode == 0 && self.text != "" {
                                     root.search_all(self.text);
                                 }
@@ -189,25 +242,31 @@ export component MainWindow inherits Window {
                                 }
                             }
                             accepted => {
+                                // sel stays -1 in power mode until an arrow picks a button
+                                if root.mode != 3 {
+                                    root.move-sel(0);
+                                }
                                 if root.mode == 0 {
                                     if self.text == "" {
                                         return;
                                     }
-                                    if root.apps.length > 0 {
-                                        root.launch-app(root.apps[0]);
+                                    if root.sel < root.apps.length {
+                                        root.launch-app(root.apps[root.sel]);
                                         root.hide-window();
                                     } else if root.files.length > 0 {
-                                        root.open-file(root.files[0]);
+                                        root.open-file(root.files[root.sel - root.apps.length]);
                                         root.hide-window();
                                     } else {
                                         root.run_query(self.text);
                                     }
                                 } else if root.mode == 1 && root.apps.length > 0 {
-                                    root.launch-app(root.apps[0]);
+                                    root.launch-app(root.apps[root.sel]);
                                     root.hide-window();
                                 } else if root.mode == 2 && root.files.length > 0 {
-                                    root.open-file(root.files[0]);
+                                    root.open-file(root.files[root.sel]);
                                     root.hide-window();
+                                } else if root.mode == 3 && root.sel >= 0 {
+                                    root.power-action(root.power-opts[root.sel].action);
                                 } else {
                                     root.run_query(self.text);
                                 }
@@ -465,23 +524,29 @@ if root.input-text == "": Text {
                     }
                 }
 
-                ScrollView {
+                SelScrollView {
                     height: parent.height;
+                    // 90px tile + 10px spacing per column, 92px + 10px per row
+                    property <int> grid-cols: max(1, floor((apps-grid.width + 10px) / 100px));
+                    item-y: floor(root.sel / root.cols) * 102px;
+                    item-height: 96px;
+                    init => { root.cols = self.grid-cols; }
+                    changed grid-cols => { root.cols = self.grid-cols; }
 
-                    FlexboxLayout {
+                    apps-grid := FlexboxLayout {
                         padding-top: 4px;
                         spacing: 10px;
 
                         flex-direction: row;
                         flex-wrap: wrap;
 
-                        for app in root.apps: Rectangle {
+                        for app[i] in root.apps: Rectangle {
                             width: 90px;
                             height: 92px;
                             border-radius: 8px;
-                            background: app-touch.has-hover ? root.hover : transparent;
+                            background: root.sel == i ? root.selected : transparent;
                             border-width: 1px;
-                            border-color: app-touch.has-hover ? root.accent : transparent;
+                            border-color: root.sel == i ? root.accent : transparent;
 
                             place := Rectangle {
                                 width: 48px;
@@ -527,6 +592,9 @@ if root.input-text == "": Text {
                             }
 
                             app-touch := TouchArea {
+                                // mouse and arrows share one selection
+                                changed has-hover => { if self.has-hover { root.sel = i; } }
+
                                 width: parent.width;
                                 height: parent.height;
 
@@ -595,23 +663,28 @@ if root.input-text == "": Text {
                     }
                 }
 
-                ScrollView {
+                SelScrollView {
                     height: parent.height;
+                    property <int> grid-cols: max(1, floor((files-grid.width + 10px) / 100px));
+                    item-y: floor(root.sel / root.cols) * 102px;
+                    item-height: 96px;
+                    init => { root.cols = self.grid-cols; }
+                    changed grid-cols => { root.cols = self.grid-cols; }
 
-                    FlexboxLayout {
+                    files-grid := FlexboxLayout {
                         padding-top: 4px;
                         spacing: 10px;
 
                         flex-direction: row;
                         flex-wrap: wrap;
 
-                        for file in root.files: Rectangle {
+                        for file[i] in root.files: Rectangle {
                             width: 90px;
                             height: 92px;
                             border-radius: 8px;
-                            background: file-touch.has-hover ? root.hover : transparent;
+                            background: root.sel == i ? root.selected : transparent;
                             border-width: 1px;
-                            border-color: file-touch.has-hover ? root.accent : transparent;
+                            border-color: root.sel == i ? root.accent : transparent;
 
                             Rectangle {
                                 width: 48px;
@@ -671,6 +744,9 @@ if root.input-text == "": Text {
                             }
 
                             file-touch := TouchArea {
+                                // mouse and arrows share one selection
+                                changed has-hover => { if self.has-hover { root.sel = i; } }
+
                                 width: parent.width;
                                 height: parent.height;
 
@@ -690,21 +766,16 @@ if root.input-text == "": Text {
                 HorizontalLayout {
                     spacing: 10px;
 
-                    for opt in [
-                        { action: "poweroff", icon: @image-url("assets/power.svg") },
-                        { action: "reboot",   icon: @image-url("assets/rotate-cw.svg") },
-                        { action: "suspend",  icon: @image-url("assets/moon.svg") },
-                        { action: "lock",     icon: @image-url("assets/lock.svg") },
-                    ]: Rectangle {
+                    for opt[i] in root.power-opts: Rectangle {
                         horizontal-stretch: 1;
                         border-radius: 8px;
-                        background: p-touch.has-hover ? root.hover : root.surface;
+                        background: root.sel == i ? root.selected : root.surface;
                         border-width: 1px;
-                        border-color: p-touch.has-hover ? root.accent : root.border;
+                        border-color: root.sel == i ? root.accent : root.border;
 
                         Image {
                             source: opt.icon;
-                            colorize: p-touch.has-hover ? root.accent : root.text-dim;
+                            colorize: root.sel == i ? root.accent : root.text-dim;
                             width: 26px;
                             height: 26px;
                             x: (parent.width - self.width) / 2;
@@ -712,6 +783,9 @@ if root.input-text == "": Text {
                         }
 
                         p-touch := TouchArea {
+                            // mouse and arrows share one selection
+                            changed has-hover => { if self.has-hover { root.sel = i; } }
+
                             width: parent.width;
                             height: parent.height;
 
@@ -732,17 +806,21 @@ if root.input-text == "": Text {
                     height: 18px;
                 }
 
-                ScrollView {
+                SelScrollView {
                     // shrink with the result count, cap at the scroll threshold
                     height: min(140px, root.apps.length * 32px);
+                    item-y: root.sel < root.apps.length ? root.sel * 32px : -1px;
+                    item-height: 30px;
 
                     VerticalLayout {
                         spacing: 2px;
 
-                        for app in root.apps: Rectangle {
+                        for app[i] in root.apps: Rectangle {
                             height: 30px;
                             border-radius: 6px;
-                            background: mixed-app-touch.has-hover ? root.hover : transparent;
+                            background: root.sel == i ? root.selected : transparent;
+                            border-width: 1px;
+                            border-color: root.sel == i ? root.accent : transparent;
 
                             HorizontalLayout {
                                 padding-left: 10px;
@@ -768,6 +846,9 @@ if root.input-text == "": Text {
                             }
 
                             mixed-app-touch := TouchArea {
+                                // mouse and arrows share one selection
+                                changed has-hover => { if self.has-hover { root.sel = i; } }
+
                                 width: parent.width;
                                 height: parent.height;
 
@@ -786,16 +867,20 @@ if root.input-text == "": Text {
                     height: 18px;
                 }
 
-                ScrollView {
+                SelScrollView {
                     height: min(140px, root.files.length * 32px);
+                    item-y: root.sel >= root.apps.length ? (root.sel - root.apps.length) * 32px : -1px;
+                    item-height: 30px;
 
                     VerticalLayout {
                         spacing: 2px;
 
-                        for file in root.files: Rectangle {
+                        for file[i] in root.files: Rectangle {
                             height: 30px;
                             border-radius: 6px;
-                            background: mixed-file-touch.has-hover ? root.hover : transparent;
+                            background: root.sel == i + root.apps.length ? root.selected : transparent;
+                            border-width: 1px;
+                            border-color: root.sel == i + root.apps.length ? root.accent : transparent;
 
                             HorizontalLayout {
                                 padding-left: 10px;
@@ -843,6 +928,9 @@ if root.input-text == "": Text {
                             }
 
                             mixed-file-touch := TouchArea {
+                                // mouse and arrows share one selection
+                                changed has-hover => { if self.has-hover { root.sel = i + root.apps.length; } }
+
                                 width: parent.width;
                                 height: parent.height;
 
@@ -873,7 +961,7 @@ if root.input-text == "": Text {
                     padding-right: 44px;
 
                     Text {
-                        text: "Enter: launch  |  Alt+1: apps  |  Alt+2: files  |  Esc: close";
+                        text: "Enter: launch  |  ↑↓←→: select  |  Alt+1: apps  |  Alt+2: files  |  Esc: close";
                         color: root.text-dim;
                         font-size: 12px;
                         vertical-alignment: center;
