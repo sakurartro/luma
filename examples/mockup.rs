@@ -1,8 +1,6 @@
 // Макет новых рядов поиска файлов (имя / OCR-сниппет / CLIP). Не подключён к приложению.
 // Запуск: cargo run --example mockup
 
-use slint::slint;
-
 slint::slint! {
 export global Palette {
     in property <color> bg: #0E120B;

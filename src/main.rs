@@ -471,7 +471,7 @@ fn main() -> Result<()> {
                     let mut hits =
                         fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str());
                     sort_entries(&mut hits, window.get_files_sort());
-                    let mut items: Vec<FileItem> = hits
+                    let items: Vec<FileItem> = hits
                         .iter()
                         .take(MAX_RENDERED)
                         .map(|f| build_file_item(f, clip::MATCH_NAME, 0))
@@ -548,7 +548,7 @@ fn main() -> Result<()> {
                         |file| file.name_lower.as_slice(),
                         query.as_str(),
                     );
-                    let mut file_items: Vec<FileItem> = fuzzy_hits
+                    let file_items: Vec<FileItem> = fuzzy_hits
                         .iter()
                         .filter(|file| {
                             !hide_patterns.iter().any(|p| file.name.starts_with(p.as_str()))

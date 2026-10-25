@@ -6,6 +6,6 @@ mod index;
 mod inference;
 
 pub use index::{
-    clip_search, CLIP_DONE, DL_DONE, DL_TOTAL, EMB_DONE, EMB_TOTAL, MATCH_NAME, MATCH_SEMANTIC, VECTORS,
+    clip_search, CLIP_DONE, DL_DONE, DL_TOTAL, EMB_DONE, EMB_TOTAL, MATCH_NAME, MATCH_SEMANTIC,
     start_indexing,
 };
