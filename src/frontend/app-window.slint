@@ -545,9 +545,9 @@ if root.input-text == "": Text {
                             width: 90px;
                             height: 92px;
                             border-radius: 8px;
-                            background: root.sel == i ? root.selected : app-touch.has-hover ? root.hover : transparent;
+                            background: root.sel == i ? root.selected : transparent;
                             border-width: 1px;
-                            border-color: root.sel == i || app-touch.has-hover ? root.accent : transparent;
+                            border-color: root.sel == i ? root.accent : transparent;
 
                             place := Rectangle {
                                 width: 48px;
@@ -593,6 +593,9 @@ if root.input-text == "": Text {
                             }
 
                             app-touch := TouchArea {
+                                // mouse and arrows share one selection
+                                changed has-hover => { if self.has-hover { root.sel = i; } }
+
                                 width: parent.width;
                                 height: parent.height;
 
@@ -681,9 +684,9 @@ if root.input-text == "": Text {
                             width: 90px;
                             height: 92px;
                             border-radius: 8px;
-                            background: root.sel == i ? root.selected : file-touch.has-hover ? root.hover : transparent;
+                            background: root.sel == i ? root.selected : transparent;
                             border-width: 1px;
-                            border-color: root.sel == i || file-touch.has-hover ? root.accent : transparent;
+                            border-color: root.sel == i ? root.accent : transparent;
 
                             Rectangle {
                                 width: 48px;
@@ -743,6 +746,9 @@ if root.input-text == "": Text {
                             }
 
                             file-touch := TouchArea {
+                                // mouse and arrows share one selection
+                                changed has-hover => { if self.has-hover { root.sel = i; } }
+
                                 width: parent.width;
                                 height: parent.height;
 
@@ -766,13 +772,13 @@ if root.input-text == "": Text {
                     for opt[i] in root.power-opts: Rectangle {
                         horizontal-stretch: 1;
                         border-radius: 8px;
-                        background: root.sel == i ? root.selected : p-touch.has-hover ? root.hover : root.surface;
+                        background: root.sel == i ? root.selected : root.surface;
                         border-width: 1px;
-                        border-color: root.sel == i || p-touch.has-hover ? root.accent : root.border;
+                        border-color: root.sel == i ? root.accent : root.border;
 
                         Image {
                             source: opt.icon;
-                            colorize: root.sel == i || p-touch.has-hover ? root.accent : root.text-dim;
+                            colorize: root.sel == i ? root.accent : root.text-dim;
                             width: 26px;
                             height: 26px;
                             x: (parent.width - self.width) / 2;
@@ -780,6 +786,9 @@ if root.input-text == "": Text {
                         }
 
                         p-touch := TouchArea {
+                            // mouse and arrows share one selection
+                            changed has-hover => { if self.has-hover { root.sel = i; } }
+
                             width: parent.width;
                             height: parent.height;
 
@@ -812,7 +821,7 @@ if root.input-text == "": Text {
                         for app[i] in root.apps: Rectangle {
                             height: 30px;
                             border-radius: 6px;
-                            background: root.sel == i ? root.selected : mixed-app-touch.has-hover ? root.hover : transparent;
+                            background: root.sel == i ? root.selected : transparent;
                             border-width: 1px;
                             border-color: root.sel == i ? root.accent : transparent;
 
@@ -840,6 +849,9 @@ if root.input-text == "": Text {
                             }
 
                             mixed-app-touch := TouchArea {
+                                // mouse and arrows share one selection
+                                changed has-hover => { if self.has-hover { root.sel = i; } }
+
                                 width: parent.width;
                                 height: parent.height;
 
@@ -869,7 +881,7 @@ if root.input-text == "": Text {
                         for file[i] in root.files: Rectangle {
                             height: 30px;
                             border-radius: 6px;
-                            background: root.sel == i + root.apps.length ? root.selected : mixed-file-touch.has-hover ? root.hover : transparent;
+                            background: root.sel == i + root.apps.length ? root.selected : transparent;
                             border-width: 1px;
                             border-color: root.sel == i + root.apps.length ? root.accent : transparent;
 
@@ -919,6 +931,9 @@ if root.input-text == "": Text {
                             }
 
                             mixed-file-touch := TouchArea {
+                                // mouse and arrows share one selection
+                                changed has-hover => { if self.has-hover { root.sel = i + root.apps.length; } }
+
                                 width: parent.width;
                                 height: parent.height;
 
