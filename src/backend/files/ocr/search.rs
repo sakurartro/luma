@@ -1,6 +1,8 @@
 // Поиск по OCR-тексту картинок. Слова всех распознанных картинок лежат в
 // памяти (как VECTORS у clip), матчинг — тот же fuzzy, что и по именам файлов.
-// Оценка = какая доля слов картинки совпала с запросом.
+// Оценка = насколько хорошо совпал запрос: для каждого слова запроса берётся
+// лучшее слово картинки (100 за точное, иначе доля этого слова, покрытая
+// запросом), и это усредняется по словам запроса.
 
 use crate::backend::apps::fuzzy::is_match;
 use crate::backend::files::files_search::FileEntry;
@@ -64,17 +66,33 @@ pub(super) fn reload(conn: &Connection) {
     *DOCS.lock().unwrap() = load_docs(conn);
 }
 
-// Percent of the image's words that fuzzy-match any query word; at least 1
-// for any match, so a hit never shows as 0%.
+// How well the query matched, averaged over query words: each takes its best
+// image word, 100 if equal, else the share of that word the query covers
+// ("invoic" vs "invoice" = 85), 0 if none matches. At least 1 for any match,
+// so a hit never shows as 0%.
 fn percent(doc_words: &[Vec<char>], query: &[Vec<char>]) -> i32 {
-    let matched = doc_words
+    let total: usize = query
         .iter()
-        .filter(|w| query.iter().any(|q| is_match(w, q)))
-        .count();
-    if matched == 0 {
+        .map(|q| {
+            doc_words
+                .iter()
+                .map(|w| {
+                    if w == q {
+                        100
+                    } else if is_match(w, q) {
+                        (q.len() * 100 / w.len()).max(1)
+                    } else {
+                        0
+                    }
+                })
+                .max()
+                .unwrap_or(0)
+        })
+        .sum();
+    if total == 0 {
         return 0;
     }
-    ((matched * 100 + doc_words.len() / 2) / doc_words.len()).max(1) as i32
+    ((total + query.len() / 2) / query.len()).max(1) as i32
 }
 
 fn search(docs: &[OcrDoc], query: &str) -> Vec<(FileEntry, i32)> {
@@ -114,8 +132,8 @@ fn search(docs: &[OcrDoc], query: &str) -> Vec<(FileEntry, i32)> {
         .collect()
 }
 
-/// Images whose recognized text fuzzy-matches the query, with the share of
-/// the image's words that matched (0-100) for the UI badge. Best first.
+/// Images whose recognized text fuzzy-matches the query, with how well the
+/// query matched (0-100, see `percent`) for the UI badge. Best first.
 /// Empty until the indexing worker has loaded the snapshot.
 pub fn ocr_search(query: &str) -> Vec<(FileEntry, i32)> {
     search(&DOCS.lock().unwrap(), query)
@@ -134,25 +152,40 @@ mod tests {
     }
 
     #[test]
-    fn percent_is_share_of_matched_words() {
+    fn exact_word_is_100_however_busy_the_image() {
         let docs = [doc("/d/a.png", 1, "invoice total paid today")];
-        assert_eq!(found(&search(&docs, "invoice")), [("/d/a.png", 25)]);
-        assert_eq!(found(&search(&docs, "invoice paid")), [("/d/a.png", 50)]); // two query words
-        assert_eq!(found(&search(&docs, "ivc")), [("/d/a.png", 25)]); // fuzzy subsequence
-        assert_eq!(found(&search(&docs, "INVOICE")), [("/d/a.png", 25)]);
+        assert_eq!(found(&search(&docs, "invoice")), [("/d/a.png", 100)]);
+        assert_eq!(found(&search(&docs, "INVOICE")), [("/d/a.png", 100)]);
+        let big = [doc("/d/big.png", 1, &format!("{} invoice", "word ".repeat(499)))];
+        assert_eq!(found(&search(&big, "invoice")), [("/d/big.png", 100)]);
     }
 
     #[test]
-    fn best_share_first_then_newest() {
+    fn partial_match_is_share_of_the_word_covered() {
+        let docs = [doc("/d/a.png", 1, "invoice total")];
+        assert_eq!(found(&search(&docs, "invoic")), [("/d/a.png", 85)]); // prefix, 6/7
+        assert_eq!(found(&search(&docs, "ivc")), [("/d/a.png", 42)]); // fuzzy subsequence, 3/7
+    }
+
+    #[test]
+    fn missing_query_word_counts_zero() {
+        let docs = [doc("/d/a.png", 1, "invoice total paid today")];
+        assert_eq!(found(&search(&docs, "invoice paid")), [("/d/a.png", 100)]);
+        assert_eq!(found(&search(&docs, "invoice zebra")), [("/d/a.png", 50)]);
+        assert!(search(&docs, "zebra").is_empty());
+    }
+
+    #[test]
+    fn best_match_first_then_newest() {
         let docs = [
-            doc("/d/long.png", 9, "invoice one two three four five six seven"),
-            doc("/d/short.png", 1, "invoice paid"),
-            doc("/d/new.png", 5, "invoice paid"),
+            doc("/d/partial.png", 9, "invoices"),
+            doc("/d/old.png", 1, "invoice paid"),
+            doc("/d/new.png", 5, "lots of words around the invoice"),
             doc("/d/none.png", 5, "nothing here"),
         ];
         assert_eq!(
             found(&search(&docs, "invoice")),
-            [("/d/new.png", 50), ("/d/short.png", 50), ("/d/long.png", 13)]
+            [("/d/new.png", 100), ("/d/old.png", 100), ("/d/partial.png", 87)]
         );
     }
 
@@ -161,16 +194,18 @@ mod tests {
         let docs = [doc("/d/a.png", 1, "ok invoice")];
         assert!(search(&docs, "in").is_empty());
         assert!(search(&[], "invoice").is_empty());
-        // short word is dropped, the long one still counts: 1 of 2 words
-        assert_eq!(found(&search(&docs, "ok invoice")), [("/d/a.png", 50)]);
+        // short word is dropped, not counted as missing
+        assert_eq!(found(&search(&docs, "ok invoice")), [("/d/a.png", 100)]);
     }
 
     #[test]
-    fn cyrillic_and_tiny_share_never_zero() {
+    fn cyrillic_and_tiny_match_never_zero() {
         let docs = [doc("/d/ru.png", 1, "счёт на оплату")];
-        assert_eq!(found(&search(&docs, "Оплат")), [("/d/ru.png", 33)]);
-        let big = [doc("/d/big.png", 1, &format!("invoice {}", "word ".repeat(499)))];
-        assert_eq!(found(&search(&big, "invoice")), [("/d/big.png", 1)]); // 0.2% -> 1
+        assert_eq!(found(&search(&docs, "Оплату")), [("/d/ru.png", 100)]);
+        assert_eq!(found(&search(&docs, "Оплат")), [("/d/ru.png", 83)]);
+        // 3 of 403 chars covered, one of three query words: rounds to 0 -> 1
+        let long = [doc("/d/long.png", 1, &format!("a{}bc", "x".repeat(400)))];
+        assert_eq!(found(&search(&long, "abc zzz qqq")), [("/d/long.png", 1)]);
     }
 
     #[test]
