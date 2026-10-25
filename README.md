@@ -6,6 +6,8 @@
 
 **A fast, native launcher for Linux**
 
+[![CI](https://github.com/sakurartro/luma/actions/workflows/ci.yml/badge.svg)](https://github.com/sakurartro/luma/actions/workflows/ci.yml)
+
 ![Luma demo](src/frontend/assets/gameplay.gif)
 
 </div>

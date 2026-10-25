@@ -1,0 +1,46 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    # Same environment as release.yml: the prebuilt ONNX Runtime (ort-sys) needs glibc >= 2.38.
+    runs-on: ubuntu-24.04
+    env:
+      # Job-level so build, test and clippy share one cache (different RUSTFLAGS force a rebuild).
+      RUSTFLAGS: "-C link-args=-lstdc++"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build g++ pkg-config \
+            libnuma-dev libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libxcb1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked --all-targets
+
+      # #[ignore] tests need downloaded ML models and stay skipped.
+      - name: Test
+        run: cargo test --locked
+
+      # TODO: add `-- -D warnings` once fix/build-warnings is merged.
+      - name: Clippy
+        run: cargo clippy --locked --all-targets
