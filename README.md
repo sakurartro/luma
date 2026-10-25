@@ -27,20 +27,27 @@ window right away.
 ## Features
 
 - Fuzzy search of applications and files
+- Applications from all XDG dirs — system, `~/.local/share`, Flatpak, Snap; a user `.desktop` override shadows the system entry
 - Launch ranking from usage stats (with time decay), pinned apps on top (right-click to pin/unpin)
 - Category filter pills
 - Calculator (`2 + 2`) and currency conversion (`100 usd to eur`)
 - File index with a background watcher and scan progress
 - Semantic photo search (CLIP) — opt-in; matching files show a `S(N%)` match-strength badge
+- Text-in-image search (OCR) — opt-in; matching files show a `T(N%)` badge
+- Power menu — shutdown, reboot, suspend, lock (power button in the bottom bar)
 - Configurable colors, search dirs and hide patterns via `settings.json`
 - `Enter` launches the top result
 
 ## Configuration
 
 Settings live at `~/.config/luma/settings.json`. The file is created with
-defaults on first run; a broken file falls back to defaults (the file is kept).
+defaults on first run; options added in newer versions are appended to an
+existing file with their defaults (your values are kept); a broken file falls
+back to defaults (the file is kept).
 The app database lives at `~/.config/luma/main.sqlite3` (`$XDG_CONFIG_HOME`
-respected) and refreshes in the background when `/usr/share/applications` changes.
+respected). Applications are read from `applications/` under `$XDG_DATA_HOME`
+(`~/.local/share`) and every `$XDG_DATA_DIRS` entry (Flatpak/Snap exports
+included); the list refreshes in the background when any of these dirs changes.
 
 - `bg`, `surface`, `hover`, `selected`, `border`, `accent`, `text`, `text_dim` — colors, `#RRGGBB` (leading `#` optional). A value that fails to parse renders as black.
 - `search_dirs` — list of paths indexed for file search, `~/` allowed
@@ -148,6 +155,7 @@ Transparency on X11 requires a compositor — GNOME and KDE ship one by default.
 
 - Linux (glibc 2.39+ — Ubuntu 24.04, Fedora 40+, Arch; the ONNX runtime of the semantic search sets this floor)
 - The prebuilt binary links at runtime against libfontconfig, libGL (mesa) and libxkbcommon
+- Power menu uses systemd: `systemctl poweroff|reboot|suspend`; lock is `loginctl lock-session`, so a locker must listen for it (e.g. hypridle with `lock_cmd`)
 
 ## Build from source
 
@@ -168,10 +176,3 @@ Dev packages (Debian/Ubuntu naming): `libxkbcommon-dev libfontconfig1-dev libgl1
 ```sh
 rm ~/.local/bin/luma_rust && rm -rf ~/.config/luma
 ```
-
-## Known limitations
-
-- `.desktop` Exec parsing is whitespace-based — quoted args like `sh -c "foo bar"` break
-- `OnlyShowIn`, `Path` and `TryExec` desktop keys are ignored
-- Contents of a directory moved into an indexed tree are indexed on the next start
-- Global hotkey grabbing is impossible on Wayland by design — hence `--toggle`
