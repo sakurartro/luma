@@ -170,7 +170,7 @@ Dev packages (Debian/Ubuntu naming): `libxkbcommon-dev libfontconfig1-dev libgl1
 ## Troubleshooting
 
 - Reset — delete `~/.config/luma/` (settings and database are recreated)
-- Stuck hotkey — kill the process or remove `/tmp/luma-rust.sock`
+- Stuck hotkey — kill the process or remove `$XDG_RUNTIME_DIR/luma-rust.sock` (or `/tmp/luma-rust-<uid>.sock`)
 - Logs go to stderr — run Luma from a terminal to see them
 
 ## Uninstall
