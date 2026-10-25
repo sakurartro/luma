@@ -119,6 +119,14 @@ impl DbState {
             let _ = conn.execute(&format!("ALTER TABLE {table} ADD COLUMN mtime INTEGER NOT NULL DEFAULT 0"), []);
         }
 
+        // v1: icon roots now include XDG_DATA_DIRS (flatpak/snap icons); the
+        // cache is only rebuilt when empty, so drop it once.
+        let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version < 1 {
+            conn.execute("DELETE FROM icons", [])?;
+            conn.pragma_update(None, "user_version", 1)?;
+        }
+
         // Cleanup of categories orphaned by connections that ran without
         // foreign_keys (see open_conn).
         conn.execute(

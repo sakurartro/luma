@@ -1,14 +1,12 @@
-use super::apps_search::Apps;
+use super::apps_search::{app_dirs, Apps};
 use super::db_init::open_conn;
-use super::db_service::del_app;
 use notify::{EventKind, RecursiveMode, Watcher};
-use std::path::Path;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-// Package installs write several .desktop files in a burst; one background
-// refresh per burst is enough, no need to rescan icons per event.
+// Package installs write several .desktop files in a burst: wait until the
+// dirs are quiet this long, then refresh once with every file complete.
 const REFRESH_DEBOUNCE: Duration = Duration::from_secs(2);
 
 pub fn start_watcher() {
@@ -17,54 +15,42 @@ pub fn start_watcher() {
         let (tx, rx) = mpsc::channel();
         let mut watcher = notify::recommended_watcher(tx).expect("failed to create watcher");
 
-        watcher
-            .watch(
-                Path::new("/usr/share/applications"),
-                RecursiveMode::Recursive,
-            )
-            .expect("failed to watch directory");
+        // shortcut: dirs created after startup (first flatpak install) aren't watched until restart
+        for dir in app_dirs() {
+            if let Err(err) = watcher.watch(&dir, RecursiveMode::Recursive) {
+                eprintln!("failed to watch {}: {err}", dir.display());
+            }
+        }
 
-        let mut last_refresh = Instant::now() - REFRESH_DEBOUNCE;
-
-        for event in rx {
-            let Ok(event) = event else {
-                continue;
-            };
-
-            match event.kind {
-                EventKind::Create(_) => {
-                    let new_desktops = event
+        let mut pending = false;
+        loop {
+            // Duration::MAX = plain blocking recv while nothing is pending
+            let timeout = if pending { REFRESH_DEBOUNCE } else { Duration::MAX };
+            match rx.recv_timeout(timeout) {
+                Ok(Ok(event)) => {
+                    // Modify covers in-place edits and rename-into-place (atomic save)
+                    pending |= matches!(
+                        event.kind,
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                    ) && event
                         .paths
                         .iter()
-                        .filter(|path| {
-                            path.is_file()
-                                && path.extension().and_then(|ext| ext.to_str()) == Some("desktop")
-                        })
-                        .count();
-
-                    if new_desktops > 0 && last_refresh.elapsed() >= REFRESH_DEBOUNCE {
-                        last_refresh = Instant::now();
-                        // Full refresh in this background thread: icon cache
-                        // (new packages bring new icons) plus a re-parse of all
-                        // .desktop files, whose upsert also refreshes icon_path
-                        // and keeps launch stats.
-                        match Apps::refresh_icons(&mut conn)
-                            .and_then(|icons| Apps::find_apps(&mut conn, &icons))
-                        {
-                            Ok(_) => {}
-                            Err(err) => eprintln!("watcher refresh error: {err}"),
-                        }
+                        .any(|path| path.extension().is_some_and(|ext| ext == "desktop"));
+                }
+                Ok(Err(_)) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    pending = false;
+                    // Full refresh in this background thread: icon cache (new
+                    // packages bring new icons) plus a re-parse of all .desktop
+                    // files. find_apps also drops removed/hidden apps and brings
+                    // back entries a deleted override was shadowing.
+                    if let Err(err) = Apps::refresh_icons(&mut conn)
+                        .and_then(|icons| Apps::find_apps(&mut conn, &icons))
+                    {
+                        eprintln!("watcher refresh error: {err}");
                     }
                 }
-
-                EventKind::Remove(_) => {
-                    for path in event.paths {
-                        if path.extension().and_then(|ext| ext.to_str()) == Some("desktop") {
-                            let _ = del_app(&mut conn, path.to_string_lossy().to_string());
-                        }
-                    }
-                }
-                _ => {}
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
     });

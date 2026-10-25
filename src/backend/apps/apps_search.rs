@@ -1,8 +1,8 @@
-use super::db_service::{get_data, insert_batch};
+use super::db_service::{app_paths, get_data, insert_batch, prune_apps};
 use anyhow::Result;
 use rusqlite::params;
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -27,12 +27,53 @@ pub struct Apps {
     pub apps: Vec<App>,
 }
 
+/// XDG data dirs in lookup priority: $XDG_DATA_HOME, then $XDG_DATA_DIRS
+/// (flatpak/snap add their export dirs there).
+fn data_dirs() -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let data_home = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("{home}/.local/share"));
+    let data_dirs = std::env::var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
+
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for dir in std::iter::once(data_home.as_str()).chain(data_dirs.split(':')) {
+        let dir = PathBuf::from(dir);
+        // spec: relative entries are invalid
+        if dir.is_absolute() && !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
+/// Desktop file ID per spec: path under the applications dir, '/' → '-'.
+fn desktop_id(dir: &Path, path: &Path) -> String {
+    path.strip_prefix(dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('/', "-")
+}
+
+/// Existing applications dirs, highest priority first.
+pub fn app_dirs() -> Vec<PathBuf> {
+    data_dirs()
+        .into_iter()
+        .map(|dir| dir.join("applications"))
+        .filter(|dir| dir.is_dir())
+        .collect()
+}
+
 impl Apps {
-    fn find_apps_paths(dir: &str, extension: &str) -> Result<Vec<PathBuf>> {
+    fn find_apps_paths(dir: &Path, extension: &str) -> Vec<PathBuf> {
         let mut apps = Vec::new();
 
-        for entry_result in WalkDir::new(dir) {
-            let entry = entry_result?;
+        // an unreadable subdir in any of the app dirs must not abort the scan
+        for entry in WalkDir::new(dir).into_iter().filter_map(Result::ok) {
             let path = entry.path();
 
             if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some(extension) {
@@ -40,7 +81,19 @@ impl Apps {
             }
         }
 
-        Ok(apps)
+        apps
+    }
+
+    /// Desktop file ID → path. An ID in an earlier dir shadows the same ID
+    /// later, so a user override with Hidden/NoDisplay still hides the system entry.
+    fn desktop_paths(dirs: &[PathBuf]) -> HashMap<String, PathBuf> {
+        let mut by_id = HashMap::new();
+        for dir in dirs {
+            for path in Self::find_apps_paths(dir, "desktop") {
+                by_id.entry(desktop_id(dir, &path)).or_insert(path);
+            }
+        }
+        by_id
     }
 
     /// Icon-name → path map, cached in the icons table. The filesystem walk of
@@ -82,17 +135,12 @@ impl Apps {
     fn scan_icon_dirs() -> HashMap<String, PathBuf> {
         let mut icons: HashMap<String, PathBuf> = HashMap::new();
         let home = std::env::var("HOME").unwrap_or_default();
-        let roots: Vec<String> = vec![
-            format!("{home}/.local/share/icons"),
-            format!("{home}/.icons"),
-            "/usr/local/share/icons".to_string(),
-            "/usr/share/icons".to_string(),
-            "/usr/share/pixmaps".to_string(),
-        ];
+        let mut roots = vec![PathBuf::from(format!("{home}/.icons"))];
+        roots.extend(data_dirs().into_iter().map(|dir| dir.join("icons")));
+        roots.push(PathBuf::from("/usr/share/pixmaps"));
 
         for root in roots {
-            let root_path = PathBuf::from(&root);
-            if !root_path.exists() {
+            if !root.exists() {
                 continue;
             }
             for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
@@ -117,13 +165,15 @@ impl Apps {
     }
 
     pub fn parse_config(
-        conn: &mut Connection,
         icons: &HashMap<String, PathBuf>,
         paths: Vec<PathBuf>,
     ) -> Result<Self> {
         let mut apps: Vec<App> = Vec::new();
         for path in paths {
-            let content = fs::read_to_string(&path)?;
+            // one unreadable/non-UTF-8 file in a user dir must not abort the scan
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
             let desktop_entry: Vec<&str> = content
                 .lines()
                 .map(str::trim)
@@ -204,10 +254,6 @@ impl Apps {
             }
         }
 
-        for chunk in apps.chunks(100) {
-            insert_batch(chunk, conn)?;
-        }
-
         Ok(Self { apps })
     }
 
@@ -217,7 +263,66 @@ impl Apps {
     }
 
     pub fn find_apps(conn: &mut Connection, icons: &HashMap<String, PathBuf>) -> Result<Self> {
-        let paths = Self::find_apps_paths("/usr/share/applications", "desktop")?;
-        Self::parse_config(conn, icons, paths)
+        let dirs = app_dirs();
+        let by_id = Self::desktop_paths(&dirs);
+        let apps = Self::parse_config(icons, by_id.values().cloned().collect())?;
+        let shown: HashSet<&str> = apps.apps.iter().map(|app| app.path.as_str()).collect();
+
+        // Rows not shown by this scan: if another shown file now owns the same
+        // desktop ID (override added, or removed and the system file is back)
+        // → move to it, keeping pin/stats; otherwise (gone, hidden, shadowed
+        // by a hidden override) → delete. Existing files outside the scanned
+        // dirs (luma started with a narrower XDG_DATA_DIRS) or skipped by the
+        // walk are left alone so a bad env can't wipe pins and stats.
+        let stale: Vec<(String, Option<String>)> = app_paths(conn)?
+            .into_iter()
+            .filter(|row| !shown.contains(row.as_str()))
+            .filter_map(|row| {
+                let path = Path::new(&row);
+                let winner = dirs
+                    .iter()
+                    .find(|dir| path.starts_with(dir))
+                    .and_then(|dir| by_id.get(&desktop_id(dir, path)));
+                if winner.is_none() && path.exists() {
+                    return None;
+                }
+                let heir = winner
+                    .map(|winner| winner.to_string_lossy().into_owned())
+                    .filter(|winner| *winner != row && shown.contains(winner.as_str()));
+                Some((row, heir))
+            })
+            .collect();
+        prune_apps(conn, &stale)?;
+
+        for chunk in apps.apps.chunks(100) {
+            insert_batch(chunk, conn)?;
+        }
+        Ok(apps)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_paths_first_dir_wins_by_id() {
+        let root = std::env::temp_dir().join(format!("luma_apps_test_{}", std::process::id()));
+        let (user, system) = (root.join("user"), root.join("system"));
+        fs::create_dir_all(user.join("kde")).unwrap();
+        fs::create_dir_all(&system).unwrap();
+        for file in [user.join("foo.desktop"), user.join("kde/bar.desktop"),
+                     system.join("foo.desktop"), system.join("kde-bar.desktop"),
+                     system.join("baz.desktop")] {
+            fs::write(file, "").unwrap();
+        }
+
+        let mut paths: Vec<PathBuf> = Apps::desktop_paths(&[user.clone(), system.clone()]).into_values().collect();
+        paths.sort();
+        fs::remove_dir_all(&root).unwrap();
+
+        let mut expected = vec![system.join("baz.desktop"), user.join("foo.desktop"), user.join("kde/bar.desktop")];
+        expected.sort();
+        assert_eq!(paths, expected);
     }
 }
