@@ -2,7 +2,7 @@ slint::include_modules!();
 mod backend;
 mod toggle;
 use anyhow::Result;
-use backend::apps::apps_search::{exec_args, App, Apps};
+use backend::apps::apps_search::{exec_args, in_path, needs_terminal, terminal_argv, App, Apps};
 use backend::apps::db_init::{DbState, open_conn};
 use backend::apps::db_service::{get_category_scores, record_launch, set_pinned};
 use backend::apps::fuzzy;
@@ -636,7 +636,15 @@ fn main() -> Result<()> {
             });
         });
         main_window.on_launch_app(|app| {
-            let args = exec_args(&app.command);
+            let mut args = exec_args(&app.command);
+            if needs_terminal(&app.path) {
+                let terminal = std::env::var("TERMINAL").ok();
+                let Some(wrapped) = terminal_argv(args, terminal.as_deref(), in_path) else {
+                    eprintln!("Failed to launch {}, no terminal found", app.command);
+                    return;
+                };
+                args = wrapped;
+            }
             let Some((program, rest)) = args.split_first() else {
                 return;
             };

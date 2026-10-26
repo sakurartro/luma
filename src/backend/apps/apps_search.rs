@@ -111,6 +111,60 @@ pub fn exec_args(exec: &str) -> Vec<String> {
         .collect()
 }
 
+/// Non-empty, non-comment lines of the `[Desktop Entry]` group.
+fn desktop_entry(content: &str) -> Vec<&str> {
+    content
+        .lines()
+        .map(str::trim)
+        .skip_while(|line| *line != "[Desktop Entry]")
+        .skip(1)
+        .take_while(|line| !line.starts_with('['))
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect()
+}
+
+/// `Terminal=true` in the .desktop file at `path`; re-read at launch time so
+/// the db schema doesn't need the flag (launches are rare).
+pub fn needs_terminal(path: &str) -> bool {
+    fs::read_to_string(path)
+        .is_ok_and(|content| desktop_entry(&content).contains(&"Terminal=true"))
+}
+
+/// `name` is a file in one of the $PATH dirs.
+pub fn in_path(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
+}
+
+/// Wraps `cmd` in a terminal: xdg-terminal-exec, then $TERMINAL, then the
+/// first known terminal found. None if there is none.
+pub fn terminal_argv(
+    cmd: Vec<String>,
+    terminal_env: Option<&str>,
+    in_path: impl Fn(&str) -> bool,
+) -> Option<Vec<String>> {
+    let prefix: Vec<&str> = if in_path("xdg-terminal-exec") {
+        vec!["xdg-terminal-exec"]
+    } else if let Some(term) = terminal_env.filter(|term| !term.is_empty()) {
+        vec![term, "-e"]
+    } else {
+        [
+            ["kitty"].as_slice(),
+            &["alacritty", "-e"],
+            &["foot"],
+            &["ghostty", "-e"],
+            &["wezterm", "start", "--"],
+            &["konsole", "-e"],
+            &["gnome-terminal", "--"],
+            &["xterm", "-e"],
+        ]
+        .into_iter()
+        .find(|argv| in_path(argv[0]))?
+        .to_vec()
+    };
+    Some(prefix.into_iter().map(String::from).chain(cmd).collect())
+}
+
 /// Existing applications dirs, highest priority first.
 pub fn app_dirs() -> Vec<PathBuf> {
     data_dirs()
@@ -226,14 +280,7 @@ impl Apps {
             let Ok(content) = fs::read_to_string(&path) else {
                 continue;
             };
-            let desktop_entry: Vec<&str> = content
-                .lines()
-                .map(str::trim)
-                .skip_while(|line| *line != "[Desktop Entry]")
-                .skip(1)
-                .take_while(|line| !line.starts_with('['))
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .collect();
+            let desktop_entry = desktop_entry(&content);
 
             let is_application = desktop_entry.iter().any(|line| *line == "Type=Application");
             let no_display = desktop_entry.iter().any(|line| *line == "NoDisplay=true");
@@ -371,6 +418,54 @@ mod tests {
         let mut expected = vec![system.join("baz.desktop"), user.join("foo.desktop"), user.join("kde/bar.desktop")];
         expected.sort();
         assert_eq!(paths, expected);
+    }
+
+    #[test]
+    fn needs_terminal_reads_desktop_entry_group() {
+        let dir = std::env::temp_dir().join(format!("luma_terminal_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let cases = [
+            ("[Desktop Entry]\nExec=htop\nTerminal=true\n", true),
+            ("[Desktop Entry]\nExec=htop\nTerminal=false\n", false),
+            ("[Desktop Entry]\nExec=htop\n\n[Desktop Action new]\nTerminal=true\n", false),
+            ("[Desktop Entry]\nExec=htop\n", false),
+        ];
+        let results: Vec<bool> = cases
+            .iter()
+            .enumerate()
+            .map(|(i, (content, _))| {
+                let path = dir.join(format!("{i}.desktop"));
+                fs::write(&path, content).unwrap();
+                needs_terminal(path.to_str().unwrap())
+            })
+            .collect();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(results, cases.map(|(_, expected)| expected));
+        assert!(!needs_terminal("/nonexistent/luma.desktop"));
+    }
+
+    #[test]
+    fn terminal_argv_picks_terminal_and_separator() {
+        let cmd = || vec!["htop".to_string(), "-d".to_string(), "5".to_string()];
+        let only = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
+
+        assert_eq!(
+            terminal_argv(cmd(), Some("foot"), only(&["xdg-terminal-exec", "kitty"])).unwrap(),
+            ["xdg-terminal-exec", "htop", "-d", "5"]
+        );
+        assert_eq!(
+            terminal_argv(cmd(), Some("myterm"), only(&["kitty"])).unwrap(),
+            ["myterm", "-e", "htop", "-d", "5"]
+        );
+        assert_eq!(
+            terminal_argv(cmd(), Some(""), only(&["gnome-terminal", "xterm"])).unwrap(),
+            ["gnome-terminal", "--", "htop", "-d", "5"]
+        );
+        assert_eq!(
+            terminal_argv(cmd(), None, only(&["wezterm", "konsole"])).unwrap(),
+            ["wezterm", "start", "--", "htop", "-d", "5"]
+        );
+        assert_eq!(terminal_argv(cmd(), None, only(&[])), None);
     }
 
     #[test]
