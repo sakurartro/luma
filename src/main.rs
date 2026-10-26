@@ -242,7 +242,9 @@ fn filter_items(
     category: &str,
     cache: &RefCell<HashMap<String, slint::Image>>,
 ) -> Vec<AppItem> {
-    fuzzy::fuzzy_search(apps, |app| app.name_lower.as_slice(), query)
+    fuzzy::fuzzy_search_by(apps, |app| app.name_lower.as_slice(), query, |app| {
+        fuzzy::usage_bonus(app.score, app.pinned)
+    })
         .into_iter()
         .filter(|app| category.is_empty() || app.categories.iter().any(|cat| cat == category))
         .map(|app| build_item(app, cache))
