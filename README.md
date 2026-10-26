@@ -4,7 +4,7 @@
 
 # Luma
 
-**A fast, native launcher for Linux**
+**A Linux launcher that finds apps, files - and photos by what's in them.**
 
 [![CI](https://github.com/sakurartro/luma/actions/workflows/ci.yml/badge.svg)](https://github.com/sakurartro/luma/actions/workflows/ci.yml)
 
@@ -56,6 +56,7 @@ included); the list refreshes in the background when any of these dirs changes.
 - `hide_patterns` — prefix match on file names; the default `["."]` hides all dotfiles
 - `semantic` — semantic photo search by meaning (CLIP embeddings, works best with English queries). `false` by default: the feature then costs nothing — no RAM, no CPU. With `true`, the models (~154 MB) are downloaded from HuggingFace on the next start, photos from `search_dirs` are indexed in the background (progress shown in the launcher), and matching files get a `S(N%)` badge — how strongly the photo matches the query. Toggling it back to `false` stops the feature after a restart; downloaded models and the index stay on disk and are reused if you enable it again.
 - `ocr` — search images by the text on them (PaddleOCR, English). `false` by default: the feature then costs nothing — no RAM, no CPU. With `true`, the models (~12 MB) are downloaded from HuggingFace on the next start, images from `search_dirs` are recognized in the background after the semantic indexing (if enabled) finishes, and matching files get a `T(N%)` badge — how well the query matched: 100% for an exact word, less for a partial or fuzzy one, averaged over the query words. Toggling it back to `false` stops the feature after a restart; downloaded models and recognized text stay on disk.
+- `currency` — currency conversion as you type, e.g. `100 usd to eur` (3-letter codes) → `100 USD = 92.31 EUR`. `true` by default; rates come from open.er-api.com and are cached in memory for an hour per base currency. With `false`, no network request is ever made; the calculator (`7/2` → `3.5`) keeps working.
 
 Full example (the defaults):
 
@@ -66,7 +67,8 @@ Full example (the defaults):
   "search_dirs": ["~/Documents", "~/Pictures", "~/Desktop"],
   "hide_patterns": ["."],
   "semantic": false,
-  "ocr": false
+  "ocr": false,
+  "currency": true
 }
 ```
 

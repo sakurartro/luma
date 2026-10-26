@@ -2,7 +2,7 @@ slint::include_modules!();
 mod backend;
 mod toggle;
 use anyhow::Result;
-use backend::apps::apps_search::{exec_args, App, Apps};
+use backend::apps::apps_search::{exec_args, in_path, needs_terminal, terminal_argv, App, Apps};
 use backend::apps::db_init::{DbState, open_conn};
 use backend::apps::db_service::{get_category_scores, record_launch, set_pinned};
 use backend::apps::fuzzy;
@@ -14,7 +14,7 @@ use backend::files::files_search::{self, FileEntry};
 use backend::files::watcher::start_files_watcher;
 use backend::general_features::engine;
 use backend::settings;
-use slint::VecModel;
+use slint::{Model, VecModel};
 use slint::winit_030::WinitWindowAccessor;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -39,6 +39,11 @@ static FILES_RELOAD: Mutex<Option<(usize, Vec<FileEntry>)>> = Mutex::new(None);
 // Coalescing: one background reload at a time; extra presses reuse the
 // in-memory copy instead of stacking reader threads.
 static FILES_RELOAD_RUNNING: AtomicBool = AtomicBool::new(false);
+
+// Thumbnail jobs (row index, path) of the current files model, popped from the
+// back, + whether the single worker thread is running. Both under one lock so
+// a new queue can't slip in between "queue empty" and the worker exiting.
+static THUMB_JOBS: Mutex<(Vec<(usize, String)>, bool)> = Mutex::new((Vec::new(), false));
 
 fn build_item(app: &App, cache: &RefCell<HashMap<String, slint::Image>>) -> AppItem {
     let icon = cache
@@ -118,20 +123,82 @@ fn build_file_item(file: &FileEntry, match_kind: i32, match_score: i32) -> FileI
         name: file.name.as_str().into(),
         path: file.path.as_str().into(),
         is_dir: file.is_dir,
+        kind: files_search::file_kind(&file.path, file.is_dir),
+        thumb: slint::Image::default(),
         match_kind,
         match_score,
     }
 }
 
+// Every files model goes through here. In the files grid (modes 2 and 4) it
+// replaces the thumbnail queue with this model's images; elsewhere it just
+// drops the old queue.
+fn set_files(window: &MainWindow, items: Vec<FileItem>) {
+    let grid = matches!(window.get_mode(), 2 | 4);
+    let mut jobs: Vec<(usize, String)> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| grid && !f.is_dir && files_search::is_image(&f.path))
+        // rows carried over into a new model may already have one
+        .filter(|(_, f)| f.thumb.size().width == 0)
+        .map(|(i, f)| (i, f.path.to_string()))
+        .collect();
+    jobs.reverse(); // popped from the back: top of the grid first
+    window.set_files(Rc::new(VecModel::from(items)).into());
+
+    let mut queue = THUMB_JOBS.lock().unwrap();
+    queue.0 = jobs;
+    if queue.0.is_empty() || queue.1 {
+        return;
+    }
+    queue.1 = true;
+    let weak = window.as_weak();
+    // One worker at a time (low-RAM machines): decodes one image, hands the
+    // pixels to the UI thread, repeats until the queue runs dry.
+    std::thread::spawn(move || {
+        let dir = backend::files::thumbs::cache_dir();
+        loop {
+            let Some((index, path)) = ({
+                let mut queue = THUMB_JOBS.lock().unwrap();
+                let job = queue.0.pop();
+                queue.1 = job.is_some();
+                job
+            }) else {
+                return;
+            };
+            let Some(out) = backend::files::thumbs::thumbnail(Path::new(&path), &dir) else { continue };
+            let Ok(img) = image::open(&out) else { continue };
+            let rgba = img.into_rgba8();
+            let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                rgba.as_raw(),
+                rgba.width(),
+                rgba.height(),
+            );
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                // The model may have been replaced since the job was queued.
+                let files = window.get_files();
+                if let Some(mut item) = files.row_data(index)
+                    && item.path == path.as_str()
+                {
+                    item.thumb = slint::Image::from_rgba8(pixels);
+                    files.set_row_data(index, item);
+                }
+            });
+        }
+    });
+}
+
 // Files found by the text on them (OCR) and by meaning (CLIP), in that order:
 // text on the image is the stronger signal. Paths already shown by the fuzzy
 // name search, hidden names and repeats between the two are skipped.
+// Runs on worker threads, so it returns (entry, match kind, score) and the UI
+// thread builds the FileItems (slint::Image in them isn't Send).
 fn extra_file_items(
     query: &str,
     shown: &std::collections::HashSet<String>,
     hide_patterns: &[String],
     limit: usize,
-) -> Vec<FileItem> {
+) -> Vec<(FileEntry, i32, i32)> {
     let ocr_hits = ocr::ocr_search(query).into_iter().map(|(f, score)| (f, ocr::MATCH_OCR, score));
     let clip_hits =
         clip::clip_search(query).into_iter().map(|(f, score)| (f, clip::MATCH_SEMANTIC, score));
@@ -144,7 +211,6 @@ fn extra_file_items(
                 && taken.insert(f.path.clone())
         })
         .take(limit)
-        .map(|(f, kind, score)| build_file_item(&f, kind, score))
         .collect()
 }
 
@@ -168,12 +234,18 @@ fn sort_entries(entries: &mut [&FileEntry], sort: i32) {
     }
 }
 
+// Image files only, for the Photos view.
+fn is_photo(file: &FileEntry) -> bool {
+    !file.is_dir && files_search::is_image(&file.path)
+}
+
 // Filtered + sorted files tab content. Sort modes: 0 = name (the order
 // get_files returns), 1 = newest first, 2 = oldest first.
-fn files_view(files: &[FileEntry], hide_patterns: &[String], sort: i32) -> Vec<FileItem> {
+fn files_view(files: &[FileEntry], hide_patterns: &[String], sort: i32, photos: bool) -> Vec<FileItem> {
     let mut filtered: Vec<&FileEntry> = files
         .iter()
         .filter(|f| !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str())))
+        .filter(|f| !photos || is_photo(f))
         .collect();
     sort_entries(&mut filtered, sort);
     filtered
@@ -242,7 +314,9 @@ fn filter_items(
     category: &str,
     cache: &RefCell<HashMap<String, slint::Image>>,
 ) -> Vec<AppItem> {
-    fuzzy::fuzzy_search(apps, |app| app.name_lower.as_slice(), query)
+    fuzzy::fuzzy_search_by(apps, |app| app.name_lower.as_slice(), query, |app| {
+        fuzzy::usage_bonus(app.score, app.pinned)
+    })
         .into_iter()
         .filter(|app| category.is_empty() || app.categories.iter().any(|cat| cat == category))
         .map(|app| build_item(app, cache))
@@ -349,6 +423,7 @@ fn main() -> Result<()> {
 
         let st = settings::load();
         let hide_patterns = st.hide_patterns.clone();
+        let currency = st.currency;
         main_window.set_bg(settings::parse_color(&st.bg));
         main_window.set_surface(settings::parse_color(&st.surface));
         main_window.set_hover(settings::parse_color(&st.hover));
@@ -357,6 +432,7 @@ fn main() -> Result<()> {
         main_window.set_accent(settings::parse_color(&st.accent));
         main_window.set_text(settings::parse_color(&st.text));
         main_window.set_text_dim(settings::parse_color(&st.text_dim));
+        main_window.set_content_search(st.semantic || st.ocr);
 
         let weak_window = main_window.as_weak();
         let icon_cache = Rc::new(RefCell::new(HashMap::new()));
@@ -451,13 +527,15 @@ fn main() -> Result<()> {
                     // in-memory copy is reused — reading all 180k rows per tab
                     // open froze the UI for up to a second.
                     load_files_if_stale(&all_files, &files_db_version, &last_files_load, weak.clone());
-                    window.set_files(
-                        Rc::new(VecModel::from(files_view(
+                    // mode 4 (Photos) shares the files tab, images only
+                    set_files(
+                        &window,
+                        files_view(
                             &all_files.borrow(),
                             &hide_patterns,
                             window.get_files_sort(),
-                        )))
-                        .into(),
+                            window.get_mode() == 4,
+                        ),
                     );
                 }
             }
@@ -475,6 +553,11 @@ fn main() -> Result<()> {
                     let files = all_files.borrow();
                     let mut hits =
                         fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str());
+                    // mode 4 (Photos) shares the files tab, images only
+                    let mode = window.get_mode();
+                    if mode == 4 {
+                        hits.retain(|f| is_photo(f));
+                    }
                     sort_entries(&mut hits, window.get_files_sort());
                     let items: Vec<FileItem> = hits
                         .iter()
@@ -491,7 +574,6 @@ fn main() -> Result<()> {
                         // already shown fuzzy results from a worker thread.
                         let weak = weak.clone();
                         let query = query.clone();
-                        let items = items.clone();
                         let base_len = items.len();
                         std::thread::spawn(move || {
                             let extra_items = extra_file_items(
@@ -502,18 +584,22 @@ fn main() -> Result<()> {
                             );
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(window) = weak.upgrade() {
-                                    // A newer keystroke already replaced the
-                                    // model through the sync path — discard.
-                                    if window.get_input_text() == query {
-                                        let mut all = items;
-                                        all.extend(extra_items);
-                                        window.set_files(Rc::new(VecModel::from(all)).into());
+                                    // A newer keystroke or a files/photos
+                                    // switch already replaced the model — discard.
+                                    if window.get_input_text() == query && window.get_mode() == mode {
+                                        // the shown fuzzy rows, with any thumbnails they got
+                                        let mut all: Vec<FileItem> =
+                                            window.get_files().iter().take(base_len).collect();
+                                        all.extend(extra_items.into_iter().map(|(f, kind, score)| {
+                                            build_file_item(&f, kind, score)
+                                        }));
+                                        set_files(&window, all);
                                     }
                                 }
                             });
                         });
                     }
-                    window.set_files(Rc::new(VecModel::from(items)).into());
+                    set_files(&window, items);
                 }
             }
         });
@@ -569,7 +655,6 @@ fn main() -> Result<()> {
                         let weak = weak.clone();
                         let query = query.clone();
                         let hide_patterns = hide_patterns.clone();
-                        let file_items = file_items.clone();
                         let base_len = file_items.len();
                         std::thread::spawn(move || {
                             let extra_items = extra_file_items(
@@ -583,15 +668,19 @@ fn main() -> Result<()> {
                                     // A newer keystroke already replaced the
                                     // model through the sync path — discard.
                                     if window.get_input_text() == query {
-                                        let mut all = file_items;
-                                        all.extend(extra_items);
-                                        window.set_files(Rc::new(VecModel::from(all)).into());
+                                        // the shown fuzzy rows
+                                        let mut all: Vec<FileItem> =
+                                            window.get_files().iter().take(base_len).collect();
+                                        all.extend(extra_items.into_iter().map(|(f, kind, score)| {
+                                            build_file_item(&f, kind, score)
+                                        }));
+                                        set_files(&window, all);
                                     }
                                 }
                             });
                         });
                     }
-                    window.set_files(Rc::new(VecModel::from(file_items)).into());
+                    set_files(&window, file_items);
                 }
             }
         });
@@ -617,17 +706,33 @@ fn main() -> Result<()> {
             let weak = weak_query.clone();
             let text = text.to_string();
             std::thread::spawn(move || {
-                let msg = match engine::general_engine(text) {
+                // Runs on every keystroke: failures (offline, unknown code)
+                // go to stderr, the plate just stays empty.
+                let msg = match engine::general_engine(text.clone(), currency) {
                     Ok(out) => out,
-                    Err(err) => format!("Error: {err}"),
+                    Err(err) => {
+                        eprintln!("query error: {err}");
+                        String::new()
+                    }
                 };
                 let _ = weak.upgrade_in_event_loop(move |window| {
-                    window.set_query_result(msg.into());
+                    // A newer keystroke already started its own query — discard.
+                    if window.get_input_text() == text.as_str() {
+                        window.set_query_result(msg.into());
+                    }
                 });
             });
         });
         main_window.on_launch_app(|app| {
-            let args = exec_args(&app.command);
+            let mut args = exec_args(&app.command);
+            if needs_terminal(&app.path) {
+                let terminal = std::env::var("TERMINAL").ok();
+                let Some(wrapped) = terminal_argv(args, terminal.as_deref(), in_path) else {
+                    eprintln!("Failed to launch {}, no terminal found", app.command);
+                    return;
+                };
+                args = wrapped;
+            }
             let Some((program, rest)) = args.split_first() else {
                 return;
             };
