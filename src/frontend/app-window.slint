@@ -46,7 +46,7 @@ export component MainWindow inherits Window {
     in property <[FileItem]> files;
     in property <[string]> categories;
     in-out property <string> selected-category;
-    // 0 = closed, 1 = apps, 2 = files
+    // 0 = closed, 1 = apps, 2 = files, 3 = power, 4 = photos (files tab, images only)
     in-out property <int> mode: 0;
     // files tab sort: 0 = name, 1 = newest, 2 = oldest
     in-out property <int> files-sort: 0;
@@ -70,7 +70,7 @@ export component MainWindow inherits Window {
     property <int> cols: 1;
     property <int> sel-len: root.mode == 0 ? root.apps.length + root.files.length
         : root.mode == 1 ? root.apps.length
-        : root.mode == 2 ? root.files.length
+        : root.mode == 2 || root.mode == 4 ? root.files.length
         : root.power-opts.length;
     property <[{ action: string, icon: image }]> power-opts: [
         { action: "poweroff", icon: @image-url("assets/power.svg") },
@@ -94,12 +94,12 @@ export component MainWindow inherits Window {
             if m == 1 {
                 root.show_apps();
             }
-            if m == 2 {
+            if m == 2 || m == 4 {
                 root.show_files();
             }
             if root.input-text != "" {
                 if m == 1 { root.search_apps(root.input-text); }
-                if m == 2 { root.search_files(root.input-text); }
+                if m == 2 || m == 4 { root.search_files(root.input-text); }
             }
             if m == 3 {
                 root.show_power_modes()
@@ -116,7 +116,7 @@ export component MainWindow inherits Window {
         if root.mode == 0 && root.input-text != "" {
             root.search_all(root.input-text);
         }
-        if root.mode == 2 {
+        if root.mode == 2 || root.mode == 4 {
             if root.input-text != "" {
                 root.search_files(root.input-text);
             } else {
@@ -136,6 +136,8 @@ export component MainWindow inherits Window {
     in-out property <bool> clip-busy: false;
     in-out property <int> clip-percent: 0;
     in-out property <string> clip-label;
+    // false when both `semantic` and `ocr` are off: photos match by name only
+    in property <bool> content-search: true;
 
 // Palette (overridable from settings.json via main.rs)
     in property <color> bg: #0E120B;
@@ -166,6 +168,11 @@ export component MainWindow inherits Window {
         KeyBinding {
             keys: @keys(Alt + "2");
             activated => { root.activate-mode(2); }
+        }
+
+        KeyBinding {
+            keys: @keys(Alt + "3");
+            activated => { root.activate-mode(4); }
         }
 
         // Single bordered panel instead of floating pills
@@ -218,8 +225,12 @@ export component MainWindow inherits Window {
                                     root.activate-mode(2);
                                     return accept;
                                 }
+                                if event.modifiers.alt && event.text == "3" {
+                                    root.activate-mode(4);
+                                    return accept;
+                                }
                                 if event.text == Key.DownArrow || event.text == Key.UpArrow {
-                                    root.move-sel((event.text == Key.DownArrow ? 1 : -1) * (root.mode == 1 || root.mode == 2 ? root.cols : 1));
+                                    root.move-sel((event.text == Key.DownArrow ? 1 : -1) * (root.mode == 1 || root.mode == 2 || root.mode == 4 ? root.cols : 1));
                                     return accept;
                                 }
                                 // in mode 0 Left/Right keep moving the text cursor
@@ -237,7 +248,7 @@ export component MainWindow inherits Window {
                                 if root.mode == 1 {
                                     root.search_apps(self.text);
                                 }
-                                if root.mode == 2 {
+                                if root.mode == 2 || root.mode == 4 {
                                     root.search_files(self.text);
                                 }
                             }
@@ -262,7 +273,7 @@ export component MainWindow inherits Window {
                                 } else if root.mode == 1 && root.apps.length > 0 {
                                     root.launch-app(root.apps[root.sel]);
                                     root.hide-window();
-                                } else if root.mode == 2 && root.files.length > 0 {
+                                } else if (root.mode == 2 || root.mode == 4) && root.files.length > 0 {
                                     root.open-file(root.files[root.sel]);
                                     root.hide-window();
                                 } else if root.mode == 3 && root.sel >= 0 {
@@ -274,7 +285,7 @@ export component MainWindow inherits Window {
                         }
 
 if root.input-text == "": Text {
-                        text: root.mode == 1 ? "Search apps..." : root.mode == 2 ? "Search files..." : "Search...";
+                        text: root.mode == 1 ? "Search apps..." : root.mode == 2 ? "Search files..." : root.mode == 4 ? "Search photos..." : "Search...";
                         color: root.text-dim;
                         font-size: 17px;
                         vertical-alignment: center;
@@ -340,17 +351,26 @@ if root.input-text == "": Text {
                     width: 52px;
                     height: 52px;
                     border-radius: 8px;
-                    background: root.surface;
+                    background: root.mode == 4 ? root.selected : root.surface;
                     border-width: 1px;
-                    border-color: root.border;
+                    border-color: root.mode == 4 ? root.accent : root.border;
 
                     Image {
-                        source: @image-url("assets/zap.svg");
-                        colorize: root.text-dim;
+                        source: @image-url("assets/image.svg");
+                        colorize: root.mode == 4 ? root.accent : root.text-dim;
                         width: 18px;
                         height: 18px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
+                    }
+
+                    TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+
+                        clicked => {
+                            root.activate-mode(4);
+                        }
                     }
                 }
 
@@ -474,6 +494,27 @@ if root.input-text == "": Text {
                         vertical-alignment: center;
                         horizontal-alignment: right;
                         min-width: 34px;
+                    }
+                }
+            }
+
+            if root.mode == 4 && !root.content-search: Rectangle {
+                height: 36px;
+                background: root.surface;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: root.border;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+
+                    Text {
+                        text: "Search by content: set \"semantic\": true / \"ocr\": true in ~/.config/luma/settings.json";
+                        color: root.text-dim;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
             }
@@ -614,7 +655,7 @@ if root.input-text == "": Text {
                 }
             }
 
-            if root.mode == 2: VerticalLayout {
+            if root.mode == 2 || root.mode == 4: VerticalLayout {
                 height: 350px;
 
                 Flickable {
@@ -961,7 +1002,7 @@ if root.input-text == "": Text {
                     padding-right: 44px;
 
                     Text {
-                        text: "Enter: launch  |  ↑↓←→: select  |  Alt+1: apps  |  Alt+2: files  |  Esc: close";
+                        text: "Enter: launch | ↑↓←→: select | Alt+1: apps | Alt+2: files | Alt+3: photos | Esc: close";
                         color: root.text-dim;
                         font-size: 12px;
                         vertical-alignment: center;

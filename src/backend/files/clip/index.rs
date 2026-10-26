@@ -4,7 +4,7 @@
 use super::inference::{l2_normalize, models_dir, ClipModels, QueryModels};
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::files::download::ensure_models;
-use crate::backend::files::files_search::{FileEntry, IMAGE_WHERE, SCAN_COMPLETE};
+use crate::backend::files::files_search::{FileEntry, image_where, SCAN_COMPLETE};
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -166,8 +166,9 @@ fn fetch_candidates(conn: &Connection, after: &str, limit: i64) -> Result<Vec<(S
     let sql = format!(
         "SELECT f.path, f.mtime FROM files f
          LEFT JOIN embeddings e ON e.file_path = f.path AND e.kind = '{KIND}' AND e.mtime = f.mtime
-         WHERE e.file_path IS NULL AND {IMAGE_WHERE} AND f.path > ?1
-         ORDER BY f.path LIMIT ?2"
+         WHERE e.file_path IS NULL AND {} AND f.path > ?1
+         ORDER BY f.path LIMIT ?2",
+        image_where()
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
@@ -238,7 +239,8 @@ pub fn start_indexing(semantic: bool) {
         let total_sql = format!(
             "SELECT COUNT(*) FROM files f LEFT JOIN embeddings e
              ON e.file_path = f.path AND e.kind = '{KIND}' AND e.mtime = f.mtime
-             WHERE e.file_path IS NULL AND {IMAGE_WHERE}"
+             WHERE e.file_path IS NULL AND {}",
+            image_where()
         );
         let total = conn.query_row(&total_sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
         EMB_TOTAL.store(total.max(0) as usize, Ordering::Relaxed);
