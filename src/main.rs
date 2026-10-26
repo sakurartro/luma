@@ -349,6 +349,7 @@ fn main() -> Result<()> {
 
         let st = settings::load();
         let hide_patterns = st.hide_patterns.clone();
+        let currency = st.currency;
         main_window.set_bg(settings::parse_color(&st.bg));
         main_window.set_surface(settings::parse_color(&st.surface));
         main_window.set_hover(settings::parse_color(&st.hover));
@@ -617,12 +618,20 @@ fn main() -> Result<()> {
             let weak = weak_query.clone();
             let text = text.to_string();
             std::thread::spawn(move || {
-                let msg = match engine::general_engine(text) {
+                // Runs on every keystroke: failures (offline, unknown code)
+                // go to stderr, the plate just stays empty.
+                let msg = match engine::general_engine(text.clone(), currency) {
                     Ok(out) => out,
-                    Err(err) => format!("Error: {err}"),
+                    Err(err) => {
+                        eprintln!("query error: {err}");
+                        String::new()
+                    }
                 };
                 let _ = weak.upgrade_in_event_loop(move |window| {
-                    window.set_query_result(msg.into());
+                    // A newer keystroke already started its own query — discard.
+                    if window.get_input_text() == text.as_str() {
+                        window.set_query_result(msg.into());
+                    }
                 });
             });
         });
