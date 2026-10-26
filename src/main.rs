@@ -168,12 +168,18 @@ fn sort_entries(entries: &mut [&FileEntry], sort: i32) {
     }
 }
 
+// Image files only, for the Photos view.
+fn is_photo(file: &FileEntry) -> bool {
+    !file.is_dir && files_search::is_image(&file.path)
+}
+
 // Filtered + sorted files tab content. Sort modes: 0 = name (the order
 // get_files returns), 1 = newest first, 2 = oldest first.
-fn files_view(files: &[FileEntry], hide_patterns: &[String], sort: i32) -> Vec<FileItem> {
+fn files_view(files: &[FileEntry], hide_patterns: &[String], sort: i32, photos: bool) -> Vec<FileItem> {
     let mut filtered: Vec<&FileEntry> = files
         .iter()
         .filter(|f| !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str())))
+        .filter(|f| !photos || is_photo(f))
         .collect();
     sort_entries(&mut filtered, sort);
     filtered
@@ -360,6 +366,7 @@ fn main() -> Result<()> {
         main_window.set_accent(settings::parse_color(&st.accent));
         main_window.set_text(settings::parse_color(&st.text));
         main_window.set_text_dim(settings::parse_color(&st.text_dim));
+        main_window.set_content_search(st.semantic || st.ocr);
 
         let weak_window = main_window.as_weak();
         let icon_cache = Rc::new(RefCell::new(HashMap::new()));
@@ -454,11 +461,13 @@ fn main() -> Result<()> {
                     // in-memory copy is reused — reading all 180k rows per tab
                     // open froze the UI for up to a second.
                     load_files_if_stale(&all_files, &files_db_version, &last_files_load, weak.clone());
+                    // mode 4 (Photos) shares the files tab, images only
                     window.set_files(
                         Rc::new(VecModel::from(files_view(
                             &all_files.borrow(),
                             &hide_patterns,
                             window.get_files_sort(),
+                            window.get_mode() == 4,
                         )))
                         .into(),
                     );
@@ -478,6 +487,11 @@ fn main() -> Result<()> {
                     let files = all_files.borrow();
                     let mut hits =
                         fuzzy::fuzzy_search(&files, |file| file.name_lower.as_slice(), query.as_str());
+                    // mode 4 (Photos) shares the files tab, images only
+                    let mode = window.get_mode();
+                    if mode == 4 {
+                        hits.retain(|f| is_photo(f));
+                    }
                     sort_entries(&mut hits, window.get_files_sort());
                     let items: Vec<FileItem> = hits
                         .iter()
@@ -505,9 +519,9 @@ fn main() -> Result<()> {
                             );
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(window) = weak.upgrade() {
-                                    // A newer keystroke already replaced the
-                                    // model through the sync path — discard.
-                                    if window.get_input_text() == query {
+                                    // A newer keystroke or a files/photos
+                                    // switch already replaced the model — discard.
+                                    if window.get_input_text() == query && window.get_mode() == mode {
                                         let mut all = items;
                                         all.extend(extra_items);
                                         window.set_files(Rc::new(VecModel::from(all)).into());

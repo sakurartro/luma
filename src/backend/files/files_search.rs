@@ -21,11 +21,21 @@ pub static DB_VERSION: AtomicUsize = AtomicUsize::new(0);
 // wipe their whole index.
 pub static SCAN_COMPLETE: AtomicBool = AtomicBool::new(false);
 
-// SQL predicate for image files in `files f`; shared by the clip and ocr
-// indexing workers.
-pub const IMAGE_WHERE: &str = "(f.path LIKE '%.jpg' OR f.path LIKE '%.jpeg' \
-     OR f.path LIKE '%.png' OR f.path LIKE '%.webp' OR f.path LIKE '%.gif' \
-     OR f.path LIKE '%.bmp')";
+// Image extensions: the clip/ocr indexing workers (image_where) and the
+// Photos view (is_image) both filter by this list.
+const IMAGE_EXTS: [&str; 6] = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
+
+// SQL predicate for image files in `files f`; LIKE is ASCII case-insensitive.
+pub fn image_where() -> String {
+    let likes: Vec<String> = IMAGE_EXTS.iter().map(|ext| format!("f.path LIKE '%.{ext}'")).collect();
+    format!("({})", likes.join(" OR "))
+}
+
+// Same rule as image_where, case-insensitive like LIKE.
+pub fn is_image(path: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, ext)| IMAGE_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
+}
 
 #[derive(Debug)]
 pub struct FileEntry {
@@ -158,5 +168,14 @@ mod tests {
         assert!(SCAN_COMPLETE.load(Ordering::Relaxed));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn is_image_by_extension() {
+        assert!(is_image("/p/a.JPG"));
+        assert!(is_image("/p/a.jpeg"));
+        assert!(!is_image("/p/a.txt"));
+        assert!(!is_image("/p/a.jpeg.txt"));
+        assert!(!is_image("/p.png/a"));
     }
 }
