@@ -269,8 +269,14 @@ export component MainWindow inherits Window {
                                 if root.mode == 2 || root.mode == 4 {
                                     root.search_files(self.text);
                                 }
+                                // live calc/currency result; clears it when the text stops matching
+                                root.run_query(self.text);
                             }
                             accepted => {
+                                // a calc/currency result is shown: Enter must not open the fuzzy hit under it
+                                if root.mode != 3 && root.query-result != "" {
+                                    return;
+                                }
                                 // sel stays -1 in power mode until an arrow picks a button
                                 if root.mode != 3 {
                                     root.move-sel(0);
@@ -285,8 +291,6 @@ export component MainWindow inherits Window {
                                     } else if root.files.length > 0 {
                                         root.open-file(root.files[root.sel - root.apps.length]);
                                         root.hide-window();
-                                    } else {
-                                        root.run_query(self.text);
                                     }
                                 } else if root.mode == 1 && root.apps.length > 0 {
                                     root.launch-app(root.apps[root.sel]);
@@ -296,8 +300,6 @@ export component MainWindow inherits Window {
                                     root.hide-window();
                                 } else if root.mode == 3 && root.sel >= 0 {
                                     root.power-action(root.power-opts[root.sel].action);
-                                } else {
-                                    root.run_query(self.text);
                                 }
                             }
                         }
