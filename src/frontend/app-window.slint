@@ -168,6 +168,16 @@ export component MainWindow inherits Window {
             activated => { root.activate-mode(2); }
         }
 
+        KeyBinding {
+            keys: @keys(Alt + "4");
+            activated => { root.activate-mode(5); }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + ",");
+            activated => { root.activate-mode(5); }
+        }
+
         // Single bordered panel instead of floating pills
         Rectangle {
             background: root.bg;
@@ -216,6 +226,10 @@ export component MainWindow inherits Window {
                                 }
                                 if event.modifiers.alt && event.text == "2" {
                                     root.activate-mode(2);
+                                    return accept;
+                                }
+                                if (event.modifiers.alt && event.text == "4") || (event.modifiers.control && event.text == ",") {
+                                    root.activate-mode(5);
                                     return accept;
                                 }
                                 if event.text == Key.DownArrow || event.text == Key.UpArrow {
@@ -274,7 +288,7 @@ export component MainWindow inherits Window {
                         }
 
 if root.input-text == "": Text {
-                        text: root.mode == 1 ? "Search apps..." : root.mode == 2 ? "Search files..." : "Search...";
+                        text: root.mode == 1 ? "Search apps..." : root.mode == 2 ? "Search files..." : root.mode == 5 ? "Settings" : "Search...";
                         color: root.text-dim;
                         font-size: 17px;
                         vertical-alignment: center;
@@ -358,17 +372,26 @@ if root.input-text == "": Text {
                     width: 52px;
                     height: 52px;
                     border-radius: 8px;
-                    background: root.surface;
+                    background: root.mode == 5 ? root.selected : root.surface;
                     border-width: 1px;
-                    border-color: root.border;
+                    border-color: root.mode == 5 ? root.accent : root.border;
 
                     Image {
-                        source: @image-url("assets/clipboard-pen.svg");
-                        colorize: root.text-dim;
+                        source: @image-url("assets/settings.svg");
+                        colorize: root.mode == 5 ? root.accent : root.text-dim;
                         width: 18px;
                         height: 18px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
+                    }
+
+                    TouchArea {
+                        width: parent.width;
+                        height: parent.height;
+
+                        clicked => {
+                            root.activate-mode(5);
+                        }
                     }
                 }
             }
@@ -795,6 +818,14 @@ if root.input-text == "": Text {
                 }
             }
 
+            // Settings view: empty for now
+            if root.mode == 5: Text {
+                text: "Settings";
+                color: root.text-dim;
+                font-size: 12px;
+                height: 18px;
+            }
+
             // Unified search from the main view: apps first, files below
             if root.mode == 0 && root.input-text != "": VerticalLayout {
                 spacing: 12px;
@@ -961,7 +992,7 @@ if root.input-text == "": Text {
                     padding-right: 44px;
 
                     Text {
-                        text: "Enter: launch  |  ↑↓←→: select  |  Alt+1: apps  |  Alt+2: files  |  Esc: close";
+                        text: "Enter: launch | ↑↓←→: select | Alt+1: apps | Alt+2: files | Alt+4: settings | Esc: close";
                         color: root.text-dim;
                         font-size: 12px;
                         vertical-alignment: center;
