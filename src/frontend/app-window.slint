@@ -83,6 +83,31 @@ export component MainWindow inherits Window {
         { action: "lock",     icon: @image-url("assets/lock.svg") },
     ];
 
+    // Full-name plate for a hovered item whose name is elided. It belongs to
+    // item tip-sel and shows only while that item is selected, so arrow keys hide it.
+    property <string> tip-text;
+    property <int> tip-sel: -1;
+    property <length> tip-x;
+    property <length> tip-y;
+    property <length> tip-h;
+    changed mode => { root.tip-sel = -1; }
+    changed apps => { root.tip-sel = -1; }
+    changed files => { root.tip-sel = -1; }
+
+    // name is "" when the item's label fits; leaving an item only clears its own
+    // plate, since the next item's hover may arrive first
+    function hover-tip(hover: bool, idx: int, name: string, x: length, y: length, h: length) {
+        if hover {
+            root.tip-sel = idx;
+            root.tip-text = name;
+            root.tip-x = x;
+            root.tip-y = y;
+            root.tip-h = h;
+        } else if root.tip-sel == idx {
+            root.tip-sel = -1;
+        }
+    }
+
     // FileItem.kind -> icon; numbers match files_search::file_kind
     pure function file-icon(file: FileItem) -> image {
         if file.is-dir { return @image-url("assets/folder.svg"); }
@@ -146,6 +171,7 @@ export component MainWindow inherits Window {
         root.mode = 0;
         root.sel = 0;
         root.selected-category = "";
+        root.tip-sel = -1;
     }
     in-out property <string> query-result;
     in-out property <string> input-text;
@@ -616,6 +642,7 @@ if root.input-text == "": Text {
                     item-height: 96px;
                     init => { root.cols = self.grid-cols; }
                     changed grid-cols => { root.cols = self.grid-cols; }
+                    scrolled => { root.tip-sel = -1; }
 
                     apps-grid := FlexboxLayout {
                         padding-top: 4px;
@@ -654,7 +681,7 @@ if root.input-text == "": Text {
                                 image-fit: contain;
                             }
 
-                            Text {
+                            app-name := Text {
                                 text: app.name;
                                 x: 4px;
                                 y: 62px;
@@ -677,7 +704,10 @@ if root.input-text == "": Text {
 
                             app-touch := TouchArea {
                                 // mouse and arrows share one selection
-                                changed has-hover => { if self.has-hover { root.sel = i; } }
+                                changed has-hover => {
+                                    if self.has-hover { root.sel = i; }
+                                    root.hover-tip(self.has-hover, i, app-name.preferred-width > app-name.width ? app.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
+                                }
 
                                 width: parent.width;
                                 height: parent.height;
@@ -754,6 +784,7 @@ if root.input-text == "": Text {
                     item-height: 96px;
                     init => { root.cols = self.grid-cols; }
                     changed grid-cols => { root.cols = self.grid-cols; }
+                    scrolled => { root.tip-sel = -1; }
 
                     files-grid := FlexboxLayout {
                         padding-top: 4px;
@@ -810,7 +841,7 @@ if root.input-text == "": Text {
                                 }
                             }
 
-                            Text {
+                            file-name := Text {
                                 text: file.name;
                                 x: 4px;
                                 y: 62px;
@@ -846,7 +877,10 @@ if root.input-text == "": Text {
 
                             file-touch := TouchArea {
                                 // mouse and arrows share one selection
-                                changed has-hover => { if self.has-hover { root.sel = i; } }
+                                changed has-hover => {
+                                    if self.has-hover { root.sel = i; }
+                                    root.hover-tip(self.has-hover, i, file-name.preferred-width > file-name.width ? file.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
+                                }
 
                                 width: parent.width;
                                 height: parent.height;
@@ -920,6 +954,7 @@ if root.input-text == "": Text {
                     height: min(140px, root.apps.length * 32px);
                     item-y: root.sel < root.apps.length ? root.sel * 32px : -1px;
                     item-height: 30px;
+                    scrolled => { root.tip-sel = -1; }
 
                     VerticalLayout {
                         spacing: 2px;
@@ -944,7 +979,7 @@ if root.input-text == "": Text {
                                     y: (parent.height - self.height) / 2;
                                 }
 
-                                Text {
+                                mixed-app-name := Text {
                                     text: app.name;
                                     color: root.text;
                                     font-size: 13px;
@@ -956,7 +991,10 @@ if root.input-text == "": Text {
 
                             mixed-app-touch := TouchArea {
                                 // mouse and arrows share one selection
-                                changed has-hover => { if self.has-hover { root.sel = i; } }
+                                changed has-hover => {
+                                    if self.has-hover { root.sel = i; }
+                                    root.hover-tip(self.has-hover, i, mixed-app-name.preferred-width > mixed-app-name.width ? app.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
+                                }
 
                                 width: parent.width;
                                 height: parent.height;
@@ -980,6 +1018,7 @@ if root.input-text == "": Text {
                     height: min(140px, root.files.length * 32px);
                     item-y: root.sel >= root.apps.length ? (root.sel - root.apps.length) * 32px : -1px;
                     item-height: 30px;
+                    scrolled => { root.tip-sel = -1; }
 
                     VerticalLayout {
                         spacing: 2px;
@@ -1005,7 +1044,7 @@ if root.input-text == "": Text {
                                     y: (parent.height - self.height) / 2;
                                 }
 
-                                Text {
+                                mixed-file-name := Text {
                                     text: file.name;
                                     color: root.text;
                                     font-size: 13px;
@@ -1038,7 +1077,10 @@ if root.input-text == "": Text {
 
                             mixed-file-touch := TouchArea {
                                 // mouse and arrows share one selection
-                                changed has-hover => { if self.has-hover { root.sel = i + root.apps.length; } }
+                                changed has-hover => {
+                                    if self.has-hover { root.sel = i + root.apps.length; }
+                                    root.hover-tip(self.has-hover, i + root.apps.length, mixed-file-name.preferred-width > mixed-file-name.width ? file.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
+                                }
 
                                 width: parent.width;
                                 height: parent.height;
@@ -1107,6 +1149,33 @@ if root.input-text == "": Text {
             }
             }
 
+        }
+    }
+
+    // Drawn last at the root so the scroll views don't clip it: below the
+    // hovered item, above it when there is no room, x kept inside the window.
+    if root.tip-text != "" && root.tip-sel == root.sel: Rectangle {
+        x: max(4px, min(root.width - self.width - 4px, root.tip-x));
+        y: root.tip-y + root.tip-h + 4px + self.height > root.height - 4px
+            ? root.tip-y - self.height - 4px
+            : root.tip-y + root.tip-h + 4px;
+        width: tip-label.width + 16px;
+        height: tip-label.height + 8px;
+        border-radius: 4px;
+        background: root.surface;
+        border-width: 1px;
+        border-color: root.border;
+
+        tip-label := Text {
+            x: 8px;
+            y: 4px;
+            // names wider than the window wrap instead of spilling out
+            width: min(self.preferred-width, root.width - 24px);
+            height: self.preferred-height;
+            text: root.tip-text;
+            color: root.text;
+            font-size: 12px;
+            wrap: char-wrap;
         }
     }
 }
