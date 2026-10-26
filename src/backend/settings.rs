@@ -27,6 +27,14 @@ pub struct Settings {
     // are downloaded from HuggingFace on the next start (~12 MB).
     #[serde(default)]
     pub ocr: bool,
+    // Currency conversion ("100 usd to eur") via open.er-api.com; with false
+    // no network request is made, the calculator keeps working.
+    #[serde(default = "default_currency")]
+    pub currency: bool,
+}
+
+fn default_currency() -> bool {
+    true
 }
 
 fn default_hide_patterns() -> Vec<String> {
@@ -56,6 +64,7 @@ impl Default for Settings {
             hide_patterns: default_hide_patterns(),
             semantic: false,
             ocr: false,
+            currency: default_currency(),
         }
     }
 }
@@ -131,6 +140,7 @@ mod tests {
         let s: Settings = serde_json::from_str(text).unwrap();
         let json: serde_json::Value = serde_json::from_str(&with_missing_fields(text, &s).unwrap()).unwrap();
         assert_eq!(json["ocr"], false);
+        assert_eq!(json["currency"], true);
         assert_eq!(json["semantic"], true);
         assert_eq!(json["bg"], "#111111");
         assert_eq!(json["custom"], 1);
