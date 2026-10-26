@@ -14,6 +14,10 @@ export struct FileItem {
     name: string,
     path: string,
     is-dir: bool,
+    // icon kind, see files_search::file_kind in Rust
+    kind: int,
+    // image thumbnail filled in by a background worker; empty = show the icon
+    thumb: image,
     // 0 = matched by name (default, no badge), 1 = semantic (CLIP),
     // 2 = by the text on the image (OCR)
     match-kind: int,
@@ -78,6 +82,20 @@ export component MainWindow inherits Window {
         { action: "suspend",  icon: @image-url("assets/moon.svg") },
         { action: "lock",     icon: @image-url("assets/lock.svg") },
     ];
+
+    // FileItem.kind -> icon; numbers match files_search::file_kind
+    pure function file-icon(file: FileItem) -> image {
+        if file.is-dir { return @image-url("assets/folder.svg"); }
+        if file.kind == 1 { return @image-url("assets/file-text.svg"); }
+        if file.kind == 2 { return @image-url("assets/file-spreadsheet.svg"); }
+        if file.kind == 3 { return @image-url("assets/presentation.svg"); }
+        if file.kind == 4 { return @image-url("assets/file-archive.svg"); }
+        if file.kind == 5 { return @image-url("assets/file-code.svg"); }
+        if file.kind == 6 { return @image-url("assets/file-music.svg"); }
+        if file.kind == 7 { return @image-url("assets/file-video.svg"); }
+        if file.kind == 8 { return @image-url("assets/file-image.svg"); }
+        return @image-url("assets/file.svg");
+    }
 
     // also clamps, since the models can shrink when async results arrive
     function move-sel(d: int) {
@@ -739,7 +757,7 @@ if root.input-text == "": Text {
                             }
 
                             Image {
-                                source: file.is-dir ? @image-url("assets/folder.svg") : @image-url("assets/file.svg");
+                                source: root.file-icon(file);
                                 colorize: root.accent;
 
                                 x: (parent.width - self.width) / 2;
@@ -748,6 +766,23 @@ if root.input-text == "": Text {
                                 width: 28px;
                                 height: 28px;
                                 image-fit: contain;
+                            }
+
+                            // thumbnail over the icon tile once the worker made one
+                            if file.thumb.width > 0: Rectangle {
+                                width: 48px;
+                                height: 48px;
+                                x: (parent.width - self.width) / 2;
+                                y: 8px;
+                                border-radius: 8px;
+                                clip: true;
+
+                                Image {
+                                    source: file.thumb;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    image-fit: cover;
+                                }
                             }
 
                             Text {
@@ -929,7 +964,7 @@ if root.input-text == "": Text {
                                 spacing: 10px;
 
                                 Image {
-                                    source: file.is-dir ? @image-url("assets/folder.svg") : @image-url("assets/file.svg");
+                                    source: root.file-icon(file);
                                     colorize: root.accent;
                                     width: 18px;
                                     height: 18px;

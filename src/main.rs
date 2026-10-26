@@ -14,7 +14,7 @@ use backend::files::files_search::{self, FileEntry};
 use backend::files::watcher::start_files_watcher;
 use backend::general_features::engine;
 use backend::settings;
-use slint::VecModel;
+use slint::{Model, VecModel};
 use slint::winit_030::WinitWindowAccessor;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -39,6 +39,11 @@ static FILES_RELOAD: Mutex<Option<(usize, Vec<FileEntry>)>> = Mutex::new(None);
 // Coalescing: one background reload at a time; extra presses reuse the
 // in-memory copy instead of stacking reader threads.
 static FILES_RELOAD_RUNNING: AtomicBool = AtomicBool::new(false);
+
+// Thumbnail jobs (row index, path) of the current files model, popped from the
+// back, + whether the single worker thread is running. Both under one lock so
+// a new queue can't slip in between "queue empty" and the worker exiting.
+static THUMB_JOBS: Mutex<(Vec<(usize, String)>, bool)> = Mutex::new((Vec::new(), false));
 
 fn build_item(app: &App, cache: &RefCell<HashMap<String, slint::Image>>) -> AppItem {
     let icon = cache
@@ -118,20 +123,82 @@ fn build_file_item(file: &FileEntry, match_kind: i32, match_score: i32) -> FileI
         name: file.name.as_str().into(),
         path: file.path.as_str().into(),
         is_dir: file.is_dir,
+        kind: files_search::file_kind(&file.path, file.is_dir),
+        thumb: slint::Image::default(),
         match_kind,
         match_score,
     }
 }
 
+// Every files model goes through here. In the files grid (modes 2 and 4) it
+// replaces the thumbnail queue with this model's images; elsewhere it just
+// drops the old queue.
+fn set_files(window: &MainWindow, items: Vec<FileItem>) {
+    let grid = matches!(window.get_mode(), 2 | 4);
+    let mut jobs: Vec<(usize, String)> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| grid && !f.is_dir && files_search::is_image(&f.path))
+        // rows carried over into a new model may already have one
+        .filter(|(_, f)| f.thumb.size().width == 0)
+        .map(|(i, f)| (i, f.path.to_string()))
+        .collect();
+    jobs.reverse(); // popped from the back: top of the grid first
+    window.set_files(Rc::new(VecModel::from(items)).into());
+
+    let mut queue = THUMB_JOBS.lock().unwrap();
+    queue.0 = jobs;
+    if queue.0.is_empty() || queue.1 {
+        return;
+    }
+    queue.1 = true;
+    let weak = window.as_weak();
+    // One worker at a time (low-RAM machines): decodes one image, hands the
+    // pixels to the UI thread, repeats until the queue runs dry.
+    std::thread::spawn(move || {
+        let dir = backend::files::thumbs::cache_dir();
+        loop {
+            let Some((index, path)) = ({
+                let mut queue = THUMB_JOBS.lock().unwrap();
+                let job = queue.0.pop();
+                queue.1 = job.is_some();
+                job
+            }) else {
+                return;
+            };
+            let Some(out) = backend::files::thumbs::thumbnail(Path::new(&path), &dir) else { continue };
+            let Ok(img) = image::open(&out) else { continue };
+            let rgba = img.into_rgba8();
+            let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                rgba.as_raw(),
+                rgba.width(),
+                rgba.height(),
+            );
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                // The model may have been replaced since the job was queued.
+                let files = window.get_files();
+                if let Some(mut item) = files.row_data(index)
+                    && item.path == path.as_str()
+                {
+                    item.thumb = slint::Image::from_rgba8(pixels);
+                    files.set_row_data(index, item);
+                }
+            });
+        }
+    });
+}
+
 // Files found by the text on them (OCR) and by meaning (CLIP), in that order:
 // text on the image is the stronger signal. Paths already shown by the fuzzy
 // name search, hidden names and repeats between the two are skipped.
+// Runs on worker threads, so it returns (entry, match kind, score) and the UI
+// thread builds the FileItems (slint::Image in them isn't Send).
 fn extra_file_items(
     query: &str,
     shown: &std::collections::HashSet<String>,
     hide_patterns: &[String],
     limit: usize,
-) -> Vec<FileItem> {
+) -> Vec<(FileEntry, i32, i32)> {
     let ocr_hits = ocr::ocr_search(query).into_iter().map(|(f, score)| (f, ocr::MATCH_OCR, score));
     let clip_hits =
         clip::clip_search(query).into_iter().map(|(f, score)| (f, clip::MATCH_SEMANTIC, score));
@@ -144,7 +211,6 @@ fn extra_file_items(
                 && taken.insert(f.path.clone())
         })
         .take(limit)
-        .map(|(f, kind, score)| build_file_item(&f, kind, score))
         .collect()
 }
 
@@ -459,14 +525,14 @@ fn main() -> Result<()> {
                     // open froze the UI for up to a second.
                     load_files_if_stale(&all_files, &files_db_version, &last_files_load, weak.clone());
                     // mode 4 (Photos) shares the files tab, images only
-                    window.set_files(
-                        Rc::new(VecModel::from(files_view(
+                    set_files(
+                        &window,
+                        files_view(
                             &all_files.borrow(),
                             &hide_patterns,
                             window.get_files_sort(),
                             window.get_mode() == 4,
-                        )))
-                        .into(),
+                        ),
                     );
                 }
             }
@@ -505,7 +571,6 @@ fn main() -> Result<()> {
                         // already shown fuzzy results from a worker thread.
                         let weak = weak.clone();
                         let query = query.clone();
-                        let items = items.clone();
                         let base_len = items.len();
                         std::thread::spawn(move || {
                             let extra_items = extra_file_items(
@@ -519,15 +584,19 @@ fn main() -> Result<()> {
                                     // A newer keystroke or a files/photos
                                     // switch already replaced the model — discard.
                                     if window.get_input_text() == query && window.get_mode() == mode {
-                                        let mut all = items;
-                                        all.extend(extra_items);
-                                        window.set_files(Rc::new(VecModel::from(all)).into());
+                                        // the shown fuzzy rows, with any thumbnails they got
+                                        let mut all: Vec<FileItem> =
+                                            window.get_files().iter().take(base_len).collect();
+                                        all.extend(extra_items.into_iter().map(|(f, kind, score)| {
+                                            build_file_item(&f, kind, score)
+                                        }));
+                                        set_files(&window, all);
                                     }
                                 }
                             });
                         });
                     }
-                    window.set_files(Rc::new(VecModel::from(items)).into());
+                    set_files(&window, items);
                 }
             }
         });
@@ -583,7 +652,6 @@ fn main() -> Result<()> {
                         let weak = weak.clone();
                         let query = query.clone();
                         let hide_patterns = hide_patterns.clone();
-                        let file_items = file_items.clone();
                         let base_len = file_items.len();
                         std::thread::spawn(move || {
                             let extra_items = extra_file_items(
@@ -597,15 +665,19 @@ fn main() -> Result<()> {
                                     // A newer keystroke already replaced the
                                     // model through the sync path — discard.
                                     if window.get_input_text() == query {
-                                        let mut all = file_items;
-                                        all.extend(extra_items);
-                                        window.set_files(Rc::new(VecModel::from(all)).into());
+                                        // the shown fuzzy rows
+                                        let mut all: Vec<FileItem> =
+                                            window.get_files().iter().take(base_len).collect();
+                                        all.extend(extra_items.into_iter().map(|(f, kind, score)| {
+                                            build_file_item(&f, kind, score)
+                                        }));
+                                        set_files(&window, all);
                                     }
                                 }
                             });
                         });
                     }
-                    window.set_files(Rc::new(VecModel::from(file_items)).into());
+                    set_files(&window, file_items);
                 }
             }
         });
