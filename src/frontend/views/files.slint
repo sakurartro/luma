@@ -1,0 +1,186 @@
+import { Theme } from "../theme.slint";
+import { AppItem, FileItem } from "../types.slint";
+import { SelScrollView, FileIcons } from "../widgets.slint";
+
+// modes 2 and 4: sort pills + files grid (Photos = images only)
+export component FilesView {
+    in property <[FileItem]> files;
+    in property <string> input-text;
+    in-out property <int> files-sort;
+    in-out property <int> sel;
+    in-out property <int> cols;
+    callback show_files();
+    callback search_files(string);
+    callback open-file(FileItem);
+    callback hide-window();
+    in-out property <int> tip-sel;
+    callback hover-tip(hover: bool, idx: int, name: string, x: length, y: length, h: length);
+
+    height: 350px;
+
+    VerticalLayout {
+
+        Flickable {
+            height: 40px;
+            content-width: sort-row.preferred-width;
+
+            sort-row := HorizontalLayout {
+                padding-left: 2px;
+                padding-right: 2px;
+                padding-top: 4px;
+                spacing: 8px;
+                alignment: start;
+
+                for sort-option[i] in ["Name", "Newest", "Oldest"]: Rectangle {
+                    height: 30px;
+                    min-width: sort-text.preferred-width + 22px;
+                    horizontal-stretch: 0;
+                    border-radius: 6px;
+                    background: root.files-sort == i ? Theme.selected : Theme.surface;
+                    border-width: 1px;
+                    border-color: root.files-sort == i ? Theme.accent : Theme.border;
+
+                    HorizontalLayout {
+                        padding-left: 11px;
+                        padding-right: 11px;
+
+                        sort-text := Text {
+                            text: sort-option;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            color: root.files-sort == i ? Theme.accent : Theme.text-dim;
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => {
+                            root.files-sort = i;
+                            if root.input-text != "" {
+                                root.search_files(root.input-text);
+                            } else {
+                                root.show_files();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        SelScrollView {
+            height: parent.height;
+            property <int> grid-cols: max(1, floor((files-grid.width + 10px) / 100px));
+            item-y: floor(root.sel / root.cols) * 102px;
+            item-height: 96px;
+            init => { root.cols = self.grid-cols; }
+            changed grid-cols => { root.cols = self.grid-cols; }
+            scrolled => { root.tip-sel = -1; }
+
+            files-grid := FlexboxLayout {
+                padding-top: 4px;
+                spacing: 10px;
+
+                flex-direction: row;
+                flex-wrap: wrap;
+
+                for file[i] in root.files: Rectangle {
+                    width: 90px;
+                    height: 92px;
+                    border-radius: 8px;
+                    background: root.sel == i ? Theme.selected : transparent;
+                    border-width: 1px;
+                    border-color: root.sel == i ? Theme.accent : transparent;
+
+                    Rectangle {
+                        width: 48px;
+                        height: 48px;
+                        x: (parent.width - self.width) / 2;
+                        y: 8px;
+                        border-radius: 8px;
+                        background: Theme.surface;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                    }
+
+                    Image {
+                        source: FileIcons.file-icon(file);
+                        colorize: Theme.accent;
+
+                        x: (parent.width - self.width) / 2;
+                        y: 18px;
+
+                        width: 28px;
+                        height: 28px;
+                        image-fit: contain;
+                    }
+
+                    // thumbnail over the icon tile once the worker made one
+                    if file.thumb.width > 0: Rectangle {
+                        width: 48px;
+                        height: 48px;
+                        x: (parent.width - self.width) / 2;
+                        y: 8px;
+                        border-radius: 8px;
+                        clip: true;
+
+                        Image {
+                            source: file.thumb;
+                            width: parent.width;
+                            height: parent.height;
+                            image-fit: cover;
+                        }
+                    }
+
+                    file-name := Text {
+                        text: file.name;
+                        x: 4px;
+                        y: 62px;
+                        width: parent.width - 8px;
+                        height: 20px;
+                        color: Theme.text;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
+
+                    // How the file matched: S(87%) = semantic (CLIP), T(40%) = text on the
+// image (OCR).
+                    if file.match-kind == 1 || file.match-kind == 2: Rectangle {
+                        height: 14px;
+                        x: parent.width - self.width - 2px;
+                        y: 2px;
+                        border-radius: 7px;
+                        background: Theme.accent;
+
+                        HorizontalLayout {
+                            padding-left: 5px;
+                            padding-right: 5px;
+
+                            Text {
+                                text: (file.match-kind == 2 ? "T(" : "S(") + file.match-score + "%)";
+                                color: Theme.surface;
+                                font-size: 10px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    file-touch := TouchArea {
+                        // mouse and arrows share one selection
+                        changed has-hover => {
+                            if self.has-hover { root.sel = i; }
+                            root.hover-tip(self.has-hover, i, file-name.preferred-width > file-name.width ? file.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
+                        }
+
+                        width: parent.width;
+                        height: parent.height;
+
+                        clicked => {
+                            root.open-file(file);
+                            root.hide-window();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

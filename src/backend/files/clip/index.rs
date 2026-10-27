@@ -4,10 +4,10 @@
 use super::inference::{l2_normalize, models_dir, ClipModels, QueryModels};
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::files::download::ensure_models;
-use crate::backend::files::files_search::{FileEntry, IMAGE_WHERE, SCAN_COMPLETE};
+use crate::backend::files::files_search::{FileEntry, image_where, SCAN_COMPLETE};
 use anyhow::Result;
 use rusqlite::{params, Connection};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 // Progress, same polling style as INDEX_* in files_search; no UI hook yet.
@@ -22,6 +22,22 @@ pub static DL_DONE: AtomicUsize = AtomicUsize::new(0);
 // (or without models/clip/). The vision session is consumed and dropped by
 // into_query() there — its arena is the memory hog and queries don't need it.
 pub static MODELS: Mutex<Option<QueryModels>> = Mutex::new(None);
+
+// Generation of the newest search query. Every keystroke spawns a worker that
+// waits on MODELS; workers whose query got superseded while waiting skip the
+// inference instead of queueing in front of the latest one.
+static LATEST_QUERY: AtomicU64 = AtomicU64::new(0);
+
+/// Called on the UI thread per keystroke, before spawning the worker, so
+/// generations follow typing order whatever order the workers start in.
+pub fn next_query() -> u64 {
+    LATEST_QUERY.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// A newer next_query() exists, so a newer worker will post its own results.
+pub fn is_stale(generation: u64) -> bool {
+    LATEST_QUERY.load(Ordering::Relaxed) != generation
+}
 
 // Embeddings + their files, snapshot taken once per startup after indexing.
 // Embeddings never change during a session (the watcher does not embed new
@@ -121,10 +137,14 @@ fn load_vectors(conn: &Connection) -> Vec<CachedVec> {
 /// comes with its match strength as a 0-100 percent for the UI badge,
 /// rescaled linearly from the measured 0.15-0.35 cosine band (raw CLIP
 /// scores for good matches stay below ~0.35).
-/// Empty when models are not loaded yet (still indexing / no models).
-pub fn clip_search(query: &str) -> Vec<(FileEntry, i32)> {
+/// Empty when models are not loaded yet (still indexing / no models) or when
+/// a newer query (see next_query) arrived while this one waited for them.
+pub fn clip_search(query: &str, generation: u64) -> Vec<(FileEntry, i32)> {
     let mut query_vec = {
         let mut guard = MODELS.lock().unwrap();
+        if is_stale(generation) {
+            return Vec::new();
+        }
         let Some(models) = guard.as_mut() else {
             return Vec::new();
         };
@@ -166,8 +186,9 @@ fn fetch_candidates(conn: &Connection, after: &str, limit: i64) -> Result<Vec<(S
     let sql = format!(
         "SELECT f.path, f.mtime FROM files f
          LEFT JOIN embeddings e ON e.file_path = f.path AND e.kind = '{KIND}' AND e.mtime = f.mtime
-         WHERE e.file_path IS NULL AND {IMAGE_WHERE} AND f.path > ?1
-         ORDER BY f.path LIMIT ?2"
+         WHERE e.file_path IS NULL AND {} AND f.path > ?1
+         ORDER BY f.path LIMIT ?2",
+        image_where()
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
@@ -238,7 +259,8 @@ pub fn start_indexing(semantic: bool) {
         let total_sql = format!(
             "SELECT COUNT(*) FROM files f LEFT JOIN embeddings e
              ON e.file_path = f.path AND e.kind = '{KIND}' AND e.mtime = f.mtime
-             WHERE e.file_path IS NULL AND {IMAGE_WHERE}"
+             WHERE e.file_path IS NULL AND {}",
+            image_where()
         );
         let total = conn.query_row(&total_sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
         EMB_TOTAL.store(total.max(0) as usize, Ordering::Relaxed);
@@ -285,6 +307,14 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    #[test]
+    fn only_the_newest_query_is_fresh() {
+        let older = next_query();
+        let newer = next_query();
+        assert!(is_stale(older));
+        assert!(!is_stale(newer));
     }
 
     #[test]

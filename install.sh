@@ -26,14 +26,23 @@ fi
 
 url="$repo/releases/latest/download/$bin-$arch"
 
+# Temp file + rename: writing over a running binary fails with ETXTBSY, and a
+# broken download must not destroy the installed one.
+tmp="$dest/.$bin.tmp.$$"
+trap 'rm -f "$tmp"' EXIT
+
 echo "Downloading $url"
-if ! curl -fsSL "$url" -o "$dest/$bin"; then
+if ! curl -fsSL "$url" -o "$tmp"; then
     echo "Error: download failed (check your network; the release exists at $repo/releases)." >&2
     exit 1
 fi
-chmod +x "$dest/$bin"
+chmod +x "$tmp"
+mv -f "$tmp" "$dest/$bin"
 
 echo "Installed: $dest/$bin"
+if pgrep -x "$bin" >/dev/null 2>&1; then
+    echo "Note: an older Luma is still running; restart it: pkill -x $bin && $bin &"
+fi
 case ":$PATH:" in
     *":$dest:"*) ;;
     *) echo "Note: $dest is not in PATH. Add it: export PATH=\"$dest:\$PATH\"" ;;

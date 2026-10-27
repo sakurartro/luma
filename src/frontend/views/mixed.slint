@@ -1,0 +1,171 @@
+import { Theme } from "../theme.slint";
+import { AppItem, FileItem } from "../types.slint";
+import { SelScrollView, FileIcons } from "../widgets.slint";
+
+// mode 0 with a query: apps first, files below
+export component MixedView {
+    in property <[AppItem]> apps;
+    in property <[FileItem]> files;
+    in-out property <int> sel;
+    callback launch-app(AppItem);
+    callback open-file(FileItem);
+    callback hide-window();
+    in-out property <int> tip-sel;
+    callback hover-tip(hover: bool, idx: int, name: string, x: length, y: length, h: length);
+
+    VerticalLayout {
+        spacing: 12px;
+
+        if root.apps.length > 0: Text {
+            text: "Apps";
+            color: Theme.text-dim;
+            font-size: 12px;
+            height: 18px;
+        }
+
+        SelScrollView {
+            // shrink with the result count, cap at the scroll threshold
+            height: min(140px, root.apps.length * 32px);
+            item-y: root.sel < root.apps.length ? root.sel * 32px : -1px;
+            item-height: 30px;
+            scrolled => { root.tip-sel = -1; }
+
+            VerticalLayout {
+                spacing: 2px;
+
+                for app[i] in root.apps: Rectangle {
+                    height: 30px;
+                    border-radius: 6px;
+                    background: root.sel == i ? Theme.selected : transparent;
+                    border-width: 1px;
+                    border-color: root.sel == i ? Theme.accent : transparent;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 10px;
+
+                        Image {
+                            source: app.icon;
+                            width: 18px;
+                            height: 18px;
+                            image-fit: contain;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        mixed-app-name := Text {
+                            text: app.name;
+                            color: Theme.text;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            width: 220px;
+                        }
+                    }
+
+                    mixed-app-touch := TouchArea {
+                        // mouse and arrows share one selection
+                        changed has-hover => {
+                            if self.has-hover { root.sel = i; }
+                            root.hover-tip(self.has-hover, i, mixed-app-name.preferred-width > mixed-app-name.width ? app.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
+                        }
+
+                        width: parent.width;
+                        height: parent.height;
+
+                        clicked => {
+                            root.launch-app(app);
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.files.length > 0: Text {
+            text: "Files";
+            color: Theme.text-dim;
+            font-size: 12px;
+            height: 18px;
+        }
+
+        SelScrollView {
+            height: min(140px, root.files.length * 32px);
+            item-y: root.sel >= root.apps.length ? (root.sel - root.apps.length) * 32px : -1px;
+            item-height: 30px;
+            scrolled => { root.tip-sel = -1; }
+
+            VerticalLayout {
+                spacing: 2px;
+
+                for file[i] in root.files: Rectangle {
+                    height: 30px;
+                    border-radius: 6px;
+                    background: root.sel == i + root.apps.length ? Theme.selected : transparent;
+                    border-width: 1px;
+                    border-color: root.sel == i + root.apps.length ? Theme.accent : transparent;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 10px;
+
+                        Image {
+                            source: FileIcons.file-icon(file);
+                            colorize: Theme.accent;
+                            width: 18px;
+                            height: 18px;
+                            image-fit: contain;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        mixed-file-name := Text {
+                            text: file.name;
+                            color: Theme.text;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            width: 220px;
+                        }
+
+                        Text {
+                            text: file.path;
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+
+                        // How the file matched: S(87%) = semantic (CLIP), T(40%) = text on the
+// image (OCR).
+                        if file.match-kind == 1 || file.match-kind == 2: Text {
+                            text: (file.match-kind == 2 ? "T(" : "S(") + file.match-score + "%)";
+                            color: Theme.accent;
+                            font-size: 11px;
+                            width: 46px;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+
+                    mixed-file-touch := TouchArea {
+                        // mouse and arrows share one selection
+                        changed has-hover => {
+                            if self.has-hover { root.sel = i + root.apps.length; }
+                            root.hover-tip(self.has-hover, i + root.apps.length, mixed-file-name.preferred-width > mixed-file-name.width ? file.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
+                        }
+
+                        width: parent.width;
+                        height: parent.height;
+
+                        clicked => {
+                            root.open-file(file);
+                            root.hide-window();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

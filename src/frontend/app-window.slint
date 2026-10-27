@@ -1,52 +1,22 @@
-import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AppItem, FileItem, SettingField } from "types.slint";
+import { ModeButton, ProgressBar } from "widgets.slint";
+import { AppsView } from "views/apps.slint";
+import { FilesView } from "views/files.slint";
+import { PowerView } from "views/power.slint";
+import { MixedView } from "views/mixed.slint";
+import { SettingsView } from "views/settings.slint";
+
+export { Theme, AppItem, FileItem, SettingField }
 
 // Omarchy/Walker-ish restyle of the Spotlight layout.
-
-export struct AppItem {
-    name: string,
-    path: string,
-    command: string,
-    icon: image,
-    pinned: bool,
-}
-
-export struct FileItem {
-    name: string,
-    path: string,
-    is-dir: bool,
-    // 0 = matched by name (default, no badge), 1 = semantic (CLIP),
-    // 2 = by the text on the image (OCR)
-    match-kind: int,
-    // match strength in 0-100 percent, only for match-kind 1 and 2
-    match-score: int,
-}
-
-// ScrollView that scrolls the keyboard-selected item into view when item-y
-// changes; item-y < 0 means the selection is not in this view.
-component SelScrollView inherits ScrollView {
-    in property <length> item-y: -1px;
-    in property <length> item-height;
-    @children
-
-    changed item-y => {
-        if self.item-y < 0 {
-            return;
-        }
-        if self.item-y < -self.content-y {
-            self.content-y = -self.item-y;
-        }
-        if self.item-y + self.item-height > self.visible-height - self.content-y {
-            self.content-y = self.visible-height - self.item-y - self.item-height;
-        }
-    }
-}
 
 export component MainWindow inherits Window {
     in property <[AppItem]> apps;
     in property <[FileItem]> files;
     in property <[string]> categories;
     in-out property <string> selected-category;
-    // 0 = closed, 1 = apps, 2 = files
+    // 0 = closed, 1 = apps, 2 = files, 3 = power, 4 = photos (files tab, images only), 5 = settings
     in-out property <int> mode: 0;
     // files tab sort: 0 = name, 1 = newest, 2 = oldest
     in-out property <int> files-sort: 0;
@@ -63,6 +33,17 @@ export component MainWindow inherits Window {
     callback run_query(string);
     callback power-action(string);
     callback hide-window();
+    // settings menu (mode 5), see ui/settings.rs
+    in property <[SettingField]> settings;
+    in property <string> settings-error;
+    in property <bool> needs-restart;
+    callback show-settings();
+    callback setting-toggle(string);
+    callback setting-text(string, string);
+    callback setting-list-set(string, int, string);
+    callback setting-list-add(string, string);
+    callback setting-list-remove(string, int);
+    callback restart();
 
     // keyboard selection; in mode 0 it runs through apps first, then files
     in-out property <int> sel: 0;
@@ -70,7 +51,7 @@ export component MainWindow inherits Window {
     property <int> cols: 1;
     property <int> sel-len: root.mode == 0 ? root.apps.length + root.files.length
         : root.mode == 1 ? root.apps.length
-        : root.mode == 2 ? root.files.length
+        : root.mode == 2 || root.mode == 4 ? root.files.length
         : root.power-opts.length;
     property <[{ action: string, icon: image }]> power-opts: [
         { action: "poweroff", icon: @image-url("assets/power.svg") },
@@ -78,6 +59,31 @@ export component MainWindow inherits Window {
         { action: "suspend",  icon: @image-url("assets/moon.svg") },
         { action: "lock",     icon: @image-url("assets/lock.svg") },
     ];
+
+    // Full-name plate for a hovered item whose name is elided. It belongs to
+    // item tip-sel and shows only while that item is selected, so arrow keys hide it.
+    property <string> tip-text;
+    property <int> tip-sel: -1;
+    property <length> tip-x;
+    property <length> tip-y;
+    property <length> tip-h;
+    changed mode => { root.tip-sel = -1; }
+    changed apps => { root.tip-sel = -1; }
+    changed files => { root.tip-sel = -1; }
+
+    // name is "" when the item's label fits; leaving an item only clears its own
+    // plate, since the next item's hover may arrive first
+    function hover-tip(hover: bool, idx: int, name: string, x: length, y: length, h: length) {
+        if hover {
+            root.tip-sel = idx;
+            root.tip-text = name;
+            root.tip-x = x;
+            root.tip-y = y;
+            root.tip-h = h;
+        } else if root.tip-sel == idx {
+            root.tip-sel = -1;
+        }
+    }
 
     // also clamps, since the models can shrink when async results arrive
     function move-sel(d: int) {
@@ -94,15 +100,19 @@ export component MainWindow inherits Window {
             if m == 1 {
                 root.show_apps();
             }
-            if m == 2 {
+            if m == 2 || m == 4 {
                 root.show_files();
             }
             if root.input-text != "" {
                 if m == 1 { root.search_apps(root.input-text); }
-                if m == 2 { root.search_files(root.input-text); }
+                if m == 2 || m == 4 { root.search_files(root.input-text); }
             }
             if m == 3 {
                 root.show_power_modes()
+            }
+            // re-read on every open: the file may have been edited by hand
+            if m == 5 {
+                root.show-settings();
             }
         }
     }
@@ -116,7 +126,7 @@ export component MainWindow inherits Window {
         if root.mode == 0 && root.input-text != "" {
             root.search_all(root.input-text);
         }
-        if root.mode == 2 {
+        if root.mode == 2 || root.mode == 4 {
             if root.input-text != "" {
                 root.search_files(root.input-text);
             } else {
@@ -128,6 +138,7 @@ export component MainWindow inherits Window {
         root.mode = 0;
         root.sel = 0;
         root.selected-category = "";
+        root.tip-sel = -1;
     }
     in-out property <string> query-result;
     in-out property <string> input-text;
@@ -136,16 +147,6 @@ export component MainWindow inherits Window {
     in-out property <bool> clip-busy: false;
     in-out property <int> clip-percent: 0;
     in-out property <string> clip-label;
-
-// Palette (overridable from settings.json via main.rs)
-    in property <color> bg: #0E120B;
-    in property <color> surface: #151B10;
-    in property <color> hover: #1E2716;
-    in property <color> selected: #28331C;
-    in property <color> border: #2C3620;
-    in property <color> accent: #A9B665;
-    in property <color> text: #E4E7D0;
-    in property <color> text-dim: #7E8A6C;
 
     min-width: 760px;
     max-width: 760px;
@@ -168,11 +169,26 @@ export component MainWindow inherits Window {
             activated => { root.activate-mode(2); }
         }
 
+        KeyBinding {
+            keys: @keys(Alt + "3");
+            activated => { root.activate-mode(4); }
+        }
+
+        KeyBinding {
+            keys: @keys(Alt + "4");
+            activated => { root.activate-mode(5); }
+        }
+
+        KeyBinding {
+            keys: @keys(Control + ",");
+            activated => { root.activate-mode(5); }
+        }
+
         // Single bordered panel instead of floating pills
         Rectangle {
-            background: root.bg;
+            background: Theme.bg;
             border-width: 2px;
-            border-color: root.border;
+            border-color: Theme.border;
             border-radius: 10px;
 
             VerticalLayout {
@@ -187,9 +203,9 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                     height: 52px;
                     border-radius: 8px;
-                    background: root.surface;
+                    background: Theme.surface;
                     border-width: 1px;
-                    border-color: root.border;
+                    border-color: Theme.border;
 
                     HorizontalLayout {
                         padding-left: 14px;
@@ -198,7 +214,7 @@ export component MainWindow inherits Window {
 
                         Image {
                             source: @image-url("assets/search.svg");
-                            colorize: root.accent;
+                            colorize: Theme.accent;
                             width: 18px;
                             height: 18px;
                             y: (parent.height - self.height) / 2;
@@ -207,7 +223,7 @@ export component MainWindow inherits Window {
                         search-input := TextInput {
                             text <=> root.input-text;
                             font-size: 17px;
-                            color: root.text;
+                            color: Theme.text;
                             vertical-alignment: center;
                             key-pressed(event) => {
                                 if event.modifiers.alt && event.text == "1" {
@@ -218,8 +234,16 @@ export component MainWindow inherits Window {
                                     root.activate-mode(2);
                                     return accept;
                                 }
+                                if event.modifiers.alt && event.text == "3" {
+                                    root.activate-mode(4);
+                                    return accept;
+                                }
+                                if (event.modifiers.alt && event.text == "4") || (event.modifiers.control && event.text == ",") {
+                                    root.activate-mode(5);
+                                    return accept;
+                                }
                                 if event.text == Key.DownArrow || event.text == Key.UpArrow {
-                                    root.move-sel((event.text == Key.DownArrow ? 1 : -1) * (root.mode == 1 || root.mode == 2 ? root.cols : 1));
+                                    root.move-sel((event.text == Key.DownArrow ? 1 : -1) * (root.mode == 1 || root.mode == 2 || root.mode == 4 ? root.cols : 1));
                                     return accept;
                                 }
                                 // in mode 0 Left/Right keep moving the text cursor
@@ -237,11 +261,17 @@ export component MainWindow inherits Window {
                                 if root.mode == 1 {
                                     root.search_apps(self.text);
                                 }
-                                if root.mode == 2 {
+                                if root.mode == 2 || root.mode == 4 {
                                     root.search_files(self.text);
                                 }
+                                // live calc/currency result; clears it when the text stops matching
+                                root.run_query(self.text);
                             }
                             accepted => {
+                                // a calc/currency result is shown: Enter must not open the fuzzy hit under it
+                                if root.mode != 3 && root.query-result != "" {
+                                    return;
+                                }
                                 // sel stays -1 in power mode until an arrow picks a button
                                 if root.mode != 3 {
                                     root.move-sel(0);
@@ -256,701 +286,153 @@ export component MainWindow inherits Window {
                                     } else if root.files.length > 0 {
                                         root.open-file(root.files[root.sel - root.apps.length]);
                                         root.hide-window();
-                                    } else {
-                                        root.run_query(self.text);
                                     }
                                 } else if root.mode == 1 && root.apps.length > 0 {
                                     root.launch-app(root.apps[root.sel]);
                                     root.hide-window();
-                                } else if root.mode == 2 && root.files.length > 0 {
+                                } else if (root.mode == 2 || root.mode == 4) && root.files.length > 0 {
                                     root.open-file(root.files[root.sel]);
                                     root.hide-window();
                                 } else if root.mode == 3 && root.sel >= 0 {
                                     root.power-action(root.power-opts[root.sel].action);
-                                } else {
-                                    root.run_query(self.text);
                                 }
                             }
                         }
 
 if root.input-text == "": Text {
-                        text: root.mode == 1 ? "Search apps..." : root.mode == 2 ? "Search files..." : "Search...";
-                        color: root.text-dim;
+                        text: root.mode == 1 ? "Search apps..." : root.mode == 2 ? "Search files..." : root.mode == 4 ? "Search photos..." : root.mode == 5 ? "Settings" : "Search...";
+                        color: Theme.text-dim;
                         font-size: 17px;
                         vertical-alignment: center;
                     }
                     }
                 }
 
-                Rectangle {
-                    width: 52px;
-                    height: 52px;
-                    border-radius: 8px;
-                    background: root.mode == 1 ? root.selected : root.surface;
-                    border-width: 1px;
-                    border-color: root.mode == 1 ? root.accent : root.border;
-
-                    Image {
-                        source: @image-url("assets/layout-grid.svg");
-                        colorize: root.mode == 1 ? root.accent : root.text-dim;
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    TouchArea {
-                        width: parent.width;
-                        height: parent.height;
-
-                        clicked => {
-                            root.activate-mode(1);
-                        }
+                ModeButton {
+                    icon: @image-url("assets/layout-grid.svg");
+                    active: root.mode == 1;
+                    clicked => {
+                        root.activate-mode(1);
                     }
                 }
 
-                Rectangle {
-                    width: 52px;
-                    height: 52px;
-                    border-radius: 8px;
-                    background: root.mode == 2 ? root.selected : root.surface;
-                    border-width: 1px;
-                    border-color: root.mode == 2 ? root.accent : root.border;
-
-                    Image {
-                        source: @image-url("assets/folder.svg");
-                        colorize: root.mode == 2 ? root.accent : root.text-dim;
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    TouchArea {
-                        width: parent.width;
-                        height: parent.height;
-
-                        clicked => {
-                            root.activate-mode(2);
-                        }
+                ModeButton {
+                    icon: @image-url("assets/folder.svg");
+                    active: root.mode == 2;
+                    clicked => {
+                        root.activate-mode(2);
                     }
                 }
 
-                Rectangle {
-                    width: 52px;
-                    height: 52px;
-                    border-radius: 8px;
-                    background: root.surface;
-                    border-width: 1px;
-                    border-color: root.border;
-
-                    Image {
-                        source: @image-url("assets/zap.svg");
-                        colorize: root.text-dim;
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                ModeButton {
+                    icon: @image-url("assets/image.svg");
+                    active: root.mode == 4;
+                    clicked => {
+                        root.activate-mode(4);
                     }
                 }
 
-                Rectangle {
-                    width: 52px;
-                    height: 52px;
-                    border-radius: 8px;
-                    background: root.surface;
-                    border-width: 1px;
-                    border-color: root.border;
-
-                    Image {
-                        source: @image-url("assets/clipboard-pen.svg");
-                        colorize: root.text-dim;
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                ModeButton {
+                    icon: @image-url("assets/settings.svg");
+                    active: root.mode == 5;
+                    clicked => {
+                        root.activate-mode(5);
                     }
                 }
             }
 
             if root.query-result != "": Rectangle {
                 height: 44px;
-                background: root.surface;
+                background: Theme.surface;
                 border-radius: 8px;
                 border-width: 1px;
-                border-color: root.border;
+                border-color: Theme.border;
 
                 Text {
                     text: root.query-result;
-                    color: root.accent;
+                    color: Theme.accent;
                     font-size: 15px;
                     vertical-alignment: center;
                     horizontal-alignment: center;
                 }
             }
 
-            if root.indexing: Rectangle {
-                height: 36px;
-                background: root.surface;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: root.border;
-
-                HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    spacing: 10px;
-
-                    Text {
-                        text: "Indexing files...";
-                        color: root.text-dim;
-                        font-size: 13px;
-                        vertical-alignment: center;
-                    }
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 6px;
-                        border-radius: 3px;
-                        background: root.selected;
-
-                        Rectangle {
-                            width: parent.width * root.index-percent / 100;
-                            height: parent.height;
-                            border-radius: 3px;
-                            background: root.accent;
-                        }
-                    }
-
-                    Text {
-                        text: "\{root.index-percent}%";
-                        color: root.accent;
-                        font-size: 13px;
-                        vertical-alignment: center;
-                        horizontal-alignment: right;
-                        min-width: 34px;
-                    }
-                }
+            if root.indexing: ProgressBar {
+                label: "Indexing files...";
+                percent: root.index-percent;
             }
 
             // Model download / photo indexing, same progress-bar style.
-            if root.clip-busy: Rectangle {
-                height: 36px;
-                background: root.surface;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: root.border;
-
-                HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    spacing: 10px;
-
-                    Text {
-                        text: root.clip-label;
-                        color: root.text-dim;
-                        font-size: 13px;
-                        vertical-alignment: center;
-                    }
-
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 6px;
-                        border-radius: 3px;
-                        background: root.selected;
-
-                        Rectangle {
-                            width: parent.width * root.clip-percent / 100;
-                            height: parent.height;
-                            border-radius: 3px;
-                            background: root.accent;
-                        }
-                    }
-
-                    Text {
-                        text: "\{root.clip-percent}%";
-                        color: root.accent;
-                        font-size: 13px;
-                        vertical-alignment: center;
-                        horizontal-alignment: right;
-                        min-width: 34px;
-                    }
-                }
+            if root.clip-busy: ProgressBar {
+                label: root.clip-label;
+                percent: root.clip-percent;
             }
 
-            if root.mode == 1: VerticalLayout {
-                height: 350px;
-
-                Flickable {
-                    height: 40px;
-                    content-width: pills-row.preferred-width;
-
-                    pills-row := HorizontalLayout {
-                        padding-left: 2px;
-                        padding-right: 2px;
-                        padding-top: 4px;
-                        spacing: 8px;
-                        alignment: start;
-
-                        for cat in root.categories: Rectangle {
-                            height: 30px;
-                            min-width: cat-text.preferred-width + 22px;
-                            horizontal-stretch: 0;
-                            border-radius: 6px;
-                            background: root.selected-category == cat ? root.selected : root.surface;
-                            border-width: 1px;
-                            border-color: root.selected-category == cat ? root.accent : root.border;
-
-                            HorizontalLayout {
-                                padding-left: 11px;
-                                padding-right: 11px;
-
-                                cat-text := Text {
-                                    text: cat;
-                                    font-size: 13px;
-                                    vertical-alignment: center;
-                                    color: root.selected-category == cat ? root.accent : root.text-dim;
-                                    overflow: elide;
-                                }
-                            }
-
-                            TouchArea {
-                                clicked => {
-                                    root.selected-category = root.selected-category == cat ? "" : cat;
-                                    root.filter_category(root.selected-category);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                SelScrollView {
-                    height: parent.height;
-                    // 90px tile + 10px spacing per column, 92px + 10px per row
-                    property <int> grid-cols: max(1, floor((apps-grid.width + 10px) / 100px));
-                    item-y: floor(root.sel / root.cols) * 102px;
-                    item-height: 96px;
-                    init => { root.cols = self.grid-cols; }
-                    changed grid-cols => { root.cols = self.grid-cols; }
-
-                    apps-grid := FlexboxLayout {
-                        padding-top: 4px;
-                        spacing: 10px;
-
-                        flex-direction: row;
-                        flex-wrap: wrap;
-
-                        for app[i] in root.apps: Rectangle {
-                            width: 90px;
-                            height: 92px;
-                            border-radius: 8px;
-                            background: root.sel == i ? root.selected : transparent;
-                            border-width: 1px;
-                            border-color: root.sel == i ? root.accent : transparent;
-
-                            place := Rectangle {
-                                width: 48px;
-                                height: 48px;
-                                x: (parent.width - self.width) / 2;
-                                y: 8px;
-                                border-radius: 8px;
-                                background: root.surface;
-                                border-width: 1px;
-                                border-color: root.border;
-                            }
-
-                            Image {
-                                source: app.icon;
-
-                                x: place.x;
-                                y: place.y;
-
-                                width: 48px;
-                                height: 48px;
-                                image-fit: contain;
-                            }
-
-                            Text {
-                                text: app.name;
-                                x: 4px;
-                                y: 62px;
-                                width: parent.width - 8px;
-                                height: 20px;
-                                color: root.text;
-                                font-size: 12px;
-                                horizontal-alignment: center;
-                                overflow: elide;
-                            }
-
-                            if app.pinned: Rectangle {
-                                width: 7px;
-                                height: 7px;
-                                border-radius: 3.5px;
-                                background: root.accent;
-                                x: parent.width - 13px;
-                                y: 8px;
-                            }
-
-                            app-touch := TouchArea {
-                                // mouse and arrows share one selection
-                                changed has-hover => { if self.has-hover { root.sel = i; } }
-
-                                width: parent.width;
-                                height: parent.height;
-
-                                clicked => {
-                                    root.launch-app(app);
-                                    root.hide-window();
-                                }
-
-                                pointer-event(e) => {
-                                    if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
-                                        root.toggle-pin(app);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            if root.mode == 1: AppsView {
+                apps: root.apps;
+                categories: root.categories;
+                selected-category <=> root.selected-category;
+                sel <=> root.sel;
+                cols <=> root.cols;
+                tip-sel <=> root.tip-sel;
+                filter_category(category) => { root.filter_category(category); }
+                launch-app(app) => { root.launch-app(app); }
+                toggle-pin(app) => { root.toggle-pin(app); }
+                hide-window => { root.hide-window(); }
+                hover-tip(hover, idx, name, x, y, h) => { root.hover-tip(hover, idx, name, x, y, h); }
             }
 
-            if root.mode == 2: VerticalLayout {
-                height: 350px;
-
-                Flickable {
-                    height: 40px;
-                    content-width: sort-row.preferred-width;
-
-                    sort-row := HorizontalLayout {
-                        padding-left: 2px;
-                        padding-right: 2px;
-                        padding-top: 4px;
-                        spacing: 8px;
-                        alignment: start;
-
-                        for sort-option[i] in ["Name", "Newest", "Oldest"]: Rectangle {
-                            height: 30px;
-                            min-width: sort-text.preferred-width + 22px;
-                            horizontal-stretch: 0;
-                            border-radius: 6px;
-                            background: root.files-sort == i ? root.selected : root.surface;
-                            border-width: 1px;
-                            border-color: root.files-sort == i ? root.accent : root.border;
-
-                            HorizontalLayout {
-                                padding-left: 11px;
-                                padding-right: 11px;
-
-                                sort-text := Text {
-                                    text: sort-option;
-                                    font-size: 13px;
-                                    vertical-alignment: center;
-                                    color: root.files-sort == i ? root.accent : root.text-dim;
-                                }
-                            }
-
-                            TouchArea {
-                                clicked => {
-                                    root.files-sort = i;
-                                    if root.input-text != "" {
-                                        root.search_files(root.input-text);
-                                    } else {
-                                        root.show_files();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                SelScrollView {
-                    height: parent.height;
-                    property <int> grid-cols: max(1, floor((files-grid.width + 10px) / 100px));
-                    item-y: floor(root.sel / root.cols) * 102px;
-                    item-height: 96px;
-                    init => { root.cols = self.grid-cols; }
-                    changed grid-cols => { root.cols = self.grid-cols; }
-
-                    files-grid := FlexboxLayout {
-                        padding-top: 4px;
-                        spacing: 10px;
-
-                        flex-direction: row;
-                        flex-wrap: wrap;
-
-                        for file[i] in root.files: Rectangle {
-                            width: 90px;
-                            height: 92px;
-                            border-radius: 8px;
-                            background: root.sel == i ? root.selected : transparent;
-                            border-width: 1px;
-                            border-color: root.sel == i ? root.accent : transparent;
-
-                            Rectangle {
-                                width: 48px;
-                                height: 48px;
-                                x: (parent.width - self.width) / 2;
-                                y: 8px;
-                                border-radius: 8px;
-                                background: root.surface;
-                                border-width: 1px;
-                                border-color: root.border;
-                            }
-
-                            Image {
-                                source: file.is-dir ? @image-url("assets/folder.svg") : @image-url("assets/file.svg");
-                                colorize: root.accent;
-
-                                x: (parent.width - self.width) / 2;
-                                y: 18px;
-
-                                width: 28px;
-                                height: 28px;
-                                image-fit: contain;
-                            }
-
-                            Text {
-                                text: file.name;
-                                x: 4px;
-                                y: 62px;
-                                width: parent.width - 8px;
-                                height: 20px;
-                                color: root.text;
-                                font-size: 12px;
-                                horizontal-alignment: center;
-                                overflow: elide;
-                            }
-
-                            // How the file matched: S(87%) = semantic (CLIP), T(40%) = text on the
-// image (OCR).
-                            if file.match-kind == 1 || file.match-kind == 2: Rectangle {
-                                height: 14px;
-                                x: parent.width - self.width - 2px;
-                                y: 2px;
-                                border-radius: 7px;
-                                background: root.accent;
-
-                                HorizontalLayout {
-                                    padding-left: 5px;
-                                    padding-right: 5px;
-
-                                    Text {
-                                        text: (file.match-kind == 2 ? "T(" : "S(") + file.match-score + "%)";
-                                        color: root.surface;
-                                        font-size: 10px;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-
-                            file-touch := TouchArea {
-                                // mouse and arrows share one selection
-                                changed has-hover => { if self.has-hover { root.sel = i; } }
-
-                                width: parent.width;
-                                height: parent.height;
-
-                                clicked => {
-                                    root.open-file(file);
-                                    root.hide-window();
-                                }
-                            }
-                        }
-                    }
-                }
+            if root.mode == 2 || root.mode == 4: FilesView {
+                files: root.files;
+                input-text: root.input-text;
+                files-sort <=> root.files-sort;
+                sel <=> root.sel;
+                cols <=> root.cols;
+                tip-sel <=> root.tip-sel;
+                show_files => { root.show_files(); }
+                search_files(query) => { root.search_files(query); }
+                open-file(file) => { root.open-file(file); }
+                hide-window => { root.hide-window(); }
+                hover-tip(hover, idx, name, x, y, h) => { root.hover-tip(hover, idx, name, x, y, h); }
             }
 
-            if root.mode == 3: VerticalLayout {
-                height: 160px;
+            if root.mode == 3: PowerView {
+                power-opts: root.power-opts;
+                sel <=> root.sel;
+                power-action(action) => { root.power-action(action); }
+            }
 
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    for opt[i] in root.power-opts: Rectangle {
-                        horizontal-stretch: 1;
-                        border-radius: 8px;
-                        background: root.sel == i ? root.selected : root.surface;
-                        border-width: 1px;
-                        border-color: root.sel == i ? root.accent : root.border;
-
-                        Image {
-                            source: opt.icon;
-                            colorize: root.sel == i ? root.accent : root.text-dim;
-                            width: 26px;
-                            height: 26px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-
-                        p-touch := TouchArea {
-                            // mouse and arrows share one selection
-                            changed has-hover => { if self.has-hover { root.sel = i; } }
-
-                            width: parent.width;
-                            height: parent.height;
-
-                            clicked => { root.power-action(opt.action); }
-                        }
-                    }
-                }
+            if root.mode == 5: SettingsView {
+                settings: root.settings;
+                settings-error: root.settings-error;
+                needs-restart: root.needs-restart;
+                setting-toggle(key) => { root.setting-toggle(key); }
+                setting-text(key, text) => { root.setting-text(key, text); }
+                setting-list-set(key, i, text) => { root.setting-list-set(key, i, text); }
+                setting-list-add(key, text) => { root.setting-list-add(key, text); }
+                setting-list-remove(key, i) => { root.setting-list-remove(key, i); }
+                restart => { root.restart(); }
             }
 
             // Unified search from the main view: apps first, files below
-            if root.mode == 0 && root.input-text != "": VerticalLayout {
-                spacing: 12px;
-
-                if root.apps.length > 0: Text {
-                    text: "Apps";
-                    color: root.text-dim;
-                    font-size: 12px;
-                    height: 18px;
-                }
-
-                SelScrollView {
-                    // shrink with the result count, cap at the scroll threshold
-                    height: min(140px, root.apps.length * 32px);
-                    item-y: root.sel < root.apps.length ? root.sel * 32px : -1px;
-                    item-height: 30px;
-
-                    VerticalLayout {
-                        spacing: 2px;
-
-                        for app[i] in root.apps: Rectangle {
-                            height: 30px;
-                            border-radius: 6px;
-                            background: root.sel == i ? root.selected : transparent;
-                            border-width: 1px;
-                            border-color: root.sel == i ? root.accent : transparent;
-
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 10px;
-
-                                Image {
-                                    source: app.icon;
-                                    width: 18px;
-                                    height: 18px;
-                                    image-fit: contain;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                Text {
-                                    text: app.name;
-                                    color: root.text;
-                                    font-size: 13px;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    width: 220px;
-                                }
-                            }
-
-                            mixed-app-touch := TouchArea {
-                                // mouse and arrows share one selection
-                                changed has-hover => { if self.has-hover { root.sel = i; } }
-
-                                width: parent.width;
-                                height: parent.height;
-
-                                clicked => {
-                                    root.launch-app(app);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if root.files.length > 0: Text {
-                    text: "Files";
-                    color: root.text-dim;
-                    font-size: 12px;
-                    height: 18px;
-                }
-
-                SelScrollView {
-                    height: min(140px, root.files.length * 32px);
-                    item-y: root.sel >= root.apps.length ? (root.sel - root.apps.length) * 32px : -1px;
-                    item-height: 30px;
-
-                    VerticalLayout {
-                        spacing: 2px;
-
-                        for file[i] in root.files: Rectangle {
-                            height: 30px;
-                            border-radius: 6px;
-                            background: root.sel == i + root.apps.length ? root.selected : transparent;
-                            border-width: 1px;
-                            border-color: root.sel == i + root.apps.length ? root.accent : transparent;
-
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 10px;
-
-                                Image {
-                                    source: file.is-dir ? @image-url("assets/folder.svg") : @image-url("assets/file.svg");
-                                    colorize: root.accent;
-                                    width: 18px;
-                                    height: 18px;
-                                    image-fit: contain;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                Text {
-                                    text: file.name;
-                                    color: root.text;
-                                    font-size: 13px;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    width: 220px;
-                                }
-
-                                Text {
-                                    text: file.path;
-                                    color: root.text-dim;
-                                    font-size: 12px;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    horizontal-stretch: 1;
-                                }
-
-                                // How the file matched: S(87%) = semantic (CLIP), T(40%) = text on the
-// image (OCR).
-                                if file.match-kind == 1 || file.match-kind == 2: Text {
-                                    text: (file.match-kind == 2 ? "T(" : "S(") + file.match-score + "%)";
-                                    color: root.accent;
-                                    font-size: 11px;
-                                    width: 46px;
-                                    vertical-alignment: center;
-                                    horizontal-alignment: center;
-                                    y: (parent.height - self.height) / 2;
-                                }
-                            }
-
-                            mixed-file-touch := TouchArea {
-                                // mouse and arrows share one selection
-                                changed has-hover => { if self.has-hover { root.sel = i + root.apps.length; } }
-
-                                width: parent.width;
-                                height: parent.height;
-
-                                clicked => {
-                                    root.open-file(file);
-                                    root.hide-window();
-                                }
-                            }
-                        }
-                    }
-                }
+            if root.mode == 0 && root.input-text != "": MixedView {
+                apps: root.apps;
+                files: root.files;
+                sel <=> root.sel;
+                tip-sel <=> root.tip-sel;
+                launch-app(app) => { root.launch-app(app); }
+                open-file(file) => { root.open-file(file); }
+                hide-window => { root.hide-window(); }
+                hover-tip(hover, idx, name, x, y, h) => { root.hover-tip(hover, idx, name, x, y, h); }
             }
 
             // Footer hint bar, Walker-style
             Rectangle {
                 height: 30px;
                 border-radius: 6px;
-                background: root.surface;
+                background: Theme.surface;
                 border-width: 1px;
-                border-color: root.border;
+                border-color: Theme.border;
 
                 HorizontalLayout {
                     x: 0;
@@ -961,8 +443,8 @@ if root.input-text == "": Text {
                     padding-right: 44px;
 
                     Text {
-                        text: "Enter: launch  |  ↑↓←→: select  |  Alt+1: apps  |  Alt+2: files  |  Esc: close";
-                        color: root.text-dim;
+                        text: "Enter: launch | Alt+1: apps | Alt+2: files | Alt+3: photos | Alt+4: settings | Esc: close";
+                        color: Theme.text-dim;
                         font-size: 12px;
                         vertical-alignment: center;
                     }
@@ -974,13 +456,13 @@ if root.input-text == "": Text {
                     width: 22px;
                     height: 22px;
                     border-radius: 5px;
-                    background: root.surface;
+                    background: Theme.surface;
                     border-width: 1px;
-                    border-color: root.border;
+                    border-color: Theme.border;
 
                     Image {
                         source: @image-url("assets/power.svg");
-                        colorize: root.text-dim;
+                        colorize: Theme.text-dim;
                         width: 12px;
                         height: 12px;
                         x: (parent.width - self.width) / 2;
@@ -998,6 +480,33 @@ if root.input-text == "": Text {
             }
             }
 
+        }
+    }
+
+    // Drawn last at the root so the scroll views don't clip it: below the
+    // hovered item, above it when there is no room, x kept inside the window.
+    if root.tip-text != "" && root.tip-sel == root.sel: Rectangle {
+        x: max(4px, min(root.width - self.width - 4px, root.tip-x));
+        y: root.tip-y + root.tip-h + 4px + self.height > root.height - 4px
+            ? root.tip-y - self.height - 4px
+            : root.tip-y + root.tip-h + 4px;
+        width: tip-label.width + 16px;
+        height: tip-label.height + 8px;
+        border-radius: 4px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border;
+
+        tip-label := Text {
+            x: 8px;
+            y: 4px;
+            // names wider than the window wrap instead of spilling out
+            width: min(self.preferred-width, root.width - 24px);
+            height: self.preferred-height;
+            text: root.tip-text;
+            color: Theme.text;
+            font-size: 12px;
+            wrap: char-wrap;
         }
     }
 }

@@ -1,0 +1,159 @@
+import { Theme } from "../theme.slint";
+import { AppItem, FileItem } from "../types.slint";
+import { SelScrollView, FileIcons } from "../widgets.slint";
+
+// mode 1: category pills + apps grid
+export component AppsView {
+    in property <[AppItem]> apps;
+    in property <[string]> categories;
+    in-out property <string> selected-category;
+    in-out property <int> sel;
+    in-out property <int> cols;
+    callback filter_category(string);
+    callback launch-app(AppItem);
+    callback toggle-pin(AppItem);
+    callback hide-window();
+    in-out property <int> tip-sel;
+    callback hover-tip(hover: bool, idx: int, name: string, x: length, y: length, h: length);
+
+    height: 350px;
+
+    VerticalLayout {
+
+        Flickable {
+            height: 40px;
+            content-width: pills-row.preferred-width;
+
+            pills-row := HorizontalLayout {
+                padding-left: 2px;
+                padding-right: 2px;
+                padding-top: 4px;
+                spacing: 8px;
+                alignment: start;
+
+                for cat in root.categories: Rectangle {
+                    height: 30px;
+                    min-width: cat-text.preferred-width + 22px;
+                    horizontal-stretch: 0;
+                    border-radius: 6px;
+                    background: root.selected-category == cat ? Theme.selected : Theme.surface;
+                    border-width: 1px;
+                    border-color: root.selected-category == cat ? Theme.accent : Theme.border;
+
+                    HorizontalLayout {
+                        padding-left: 11px;
+                        padding-right: 11px;
+
+                        cat-text := Text {
+                            text: cat;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            color: root.selected-category == cat ? Theme.accent : Theme.text-dim;
+                            overflow: elide;
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => {
+                            root.selected-category = root.selected-category == cat ? "" : cat;
+                            root.filter_category(root.selected-category);
+                        }
+                    }
+                }
+            }
+        }
+
+        SelScrollView {
+            height: parent.height;
+            // 90px tile + 10px spacing per column, 92px + 10px per row
+            property <int> grid-cols: max(1, floor((apps-grid.width + 10px) / 100px));
+            item-y: floor(root.sel / root.cols) * 102px;
+            item-height: 96px;
+            init => { root.cols = self.grid-cols; }
+            changed grid-cols => { root.cols = self.grid-cols; }
+            scrolled => { root.tip-sel = -1; }
+
+            apps-grid := FlexboxLayout {
+                padding-top: 4px;
+                spacing: 10px;
+
+                flex-direction: row;
+                flex-wrap: wrap;
+
+                for app[i] in root.apps: Rectangle {
+                    width: 90px;
+                    height: 92px;
+                    border-radius: 8px;
+                    background: root.sel == i ? Theme.selected : transparent;
+                    border-width: 1px;
+                    border-color: root.sel == i ? Theme.accent : transparent;
+
+                    place := Rectangle {
+                        width: 48px;
+                        height: 48px;
+                        x: (parent.width - self.width) / 2;
+                        y: 8px;
+                        border-radius: 8px;
+                        background: Theme.surface;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                    }
+
+                    Image {
+                        source: app.icon;
+
+                        x: place.x;
+                        y: place.y;
+
+                        width: 48px;
+                        height: 48px;
+                        image-fit: contain;
+                    }
+
+                    app-name := Text {
+                        text: app.name;
+                        x: 4px;
+                        y: 62px;
+                        width: parent.width - 8px;
+                        height: 20px;
+                        color: Theme.text;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
+
+                    if app.pinned: Rectangle {
+                        width: 7px;
+                        height: 7px;
+                        border-radius: 3.5px;
+                        background: Theme.accent;
+                        x: parent.width - 13px;
+                        y: 8px;
+                    }
+
+                    app-touch := TouchArea {
+                        // mouse and arrows share one selection
+                        changed has-hover => {
+                            if self.has-hover { root.sel = i; }
+                            root.hover-tip(self.has-hover, i, app-name.preferred-width > app-name.width ? app.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
+                        }
+
+                        width: parent.width;
+                        height: parent.height;
+
+                        clicked => {
+                            root.launch-app(app);
+                            root.hide-window();
+                        }
+
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.up && e.button == PointerEventButton.right) {
+                                root.toggle-pin(app);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
