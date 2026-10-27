@@ -1,0 +1,22 @@
+export struct AppItem {
+    name: string,
+    path: string,
+    command: string,
+    icon: image,
+    pinned: bool,
+}
+
+export struct FileItem {
+    name: string,
+    path: string,
+    is-dir: bool,
+    // icon kind, see files_search::file_kind in Rust
+    kind: int,
+    // image thumbnail filled in by a background worker; empty = show the icon
+    thumb: image,
+    // 0 = matched by name (default, no badge), 1 = semantic (CLIP),
+    // 2 = by the text on the image (OCR)
+    match-kind: int,
+    // match strength in 0-100 percent, only for match-kind 1 and 2
+    match-score: int,
+}

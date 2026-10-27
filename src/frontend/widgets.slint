@@ -1,0 +1,119 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { FileItem } from "types.slint";
+
+// ScrollView that scrolls the keyboard-selected item into view when item-y
+// changes; item-y < 0 means the selection is not in this view.
+export component SelScrollView inherits ScrollView {
+    in property <length> item-y: -1px;
+    in property <length> item-height;
+    @children
+
+    changed item-y => {
+        if self.item-y < 0 {
+            return;
+        }
+        if self.item-y < -self.content-y {
+            self.content-y = -self.item-y;
+        }
+        if self.item-y + self.item-height > self.visible-height - self.content-y {
+            self.content-y = self.visible-height - self.item-y - self.item-height;
+        }
+    }
+}
+
+export global FileIcons {
+// FileItem.kind -> icon; numbers match files_search::file_kind
+public pure function file-icon(file: FileItem) -> image {
+    if file.is-dir { return @image-url("assets/folder.svg"); }
+    if file.kind == 1 { return @image-url("assets/file-text.svg"); }
+    if file.kind == 2 { return @image-url("assets/file-spreadsheet.svg"); }
+    if file.kind == 3 { return @image-url("assets/presentation.svg"); }
+    if file.kind == 4 { return @image-url("assets/file-archive.svg"); }
+    if file.kind == 5 { return @image-url("assets/file-code.svg"); }
+    if file.kind == 6 { return @image-url("assets/file-music.svg"); }
+    if file.kind == 7 { return @image-url("assets/file-video.svg"); }
+    if file.kind == 8 { return @image-url("assets/file-image.svg"); }
+    return @image-url("assets/file.svg");
+}
+}
+
+// Square mode switch in the header (apps, files, photos, settings).
+export component ModeButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active;
+    callback clicked();
+
+    width: 52px;
+    height: 52px;
+    border-radius: 8px;
+    background: root.active ? Theme.selected : Theme.surface;
+    border-width: 1px;
+    border-color: root.active ? Theme.accent : Theme.border;
+
+    Image {
+        source: root.icon;
+        colorize: root.active ? Theme.accent : Theme.text-dim;
+        width: 18px;
+        height: 18px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    TouchArea {
+        width: parent.width;
+        height: parent.height;
+
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// Labelled progress banner (file indexing, model download / photo indexing).
+export component ProgressBar inherits Rectangle {
+    in property <string> label;
+    in property <int> percent;
+
+    height: 36px;
+    background: Theme.surface;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+
+        Text {
+            text: root.label;
+            color: Theme.text-dim;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            height: 6px;
+            border-radius: 3px;
+            background: Theme.selected;
+
+            Rectangle {
+                width: parent.width * root.percent / 100;
+                height: parent.height;
+                border-radius: 3px;
+                background: Theme.accent;
+            }
+        }
+
+        Text {
+            text: "\{root.percent}%";
+            color: Theme.accent;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            min-width: 34px;
+        }
+    }
+}
