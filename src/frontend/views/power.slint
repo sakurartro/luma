@@ -1,0 +1,45 @@
+import { Theme } from "../theme.slint";
+import { AppItem, FileItem } from "../types.slint";
+import { SelScrollView, FileIcons } from "../widgets.slint";
+
+// mode 3: power buttons
+export component PowerView {
+    in property <[{ action: string, icon: image }]> power-opts;
+    in-out property <int> sel;
+    callback power-action(string);
+
+    VerticalLayout {
+        height: 160px;
+
+        HorizontalLayout {
+            spacing: 10px;
+
+            for opt[i] in root.power-opts: Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 8px;
+                background: root.sel == i ? Theme.selected : Theme.surface;
+                border-width: 1px;
+                border-color: root.sel == i ? Theme.accent : Theme.border;
+
+                Image {
+                    source: opt.icon;
+                    colorize: root.sel == i ? Theme.accent : Theme.text-dim;
+                    width: 26px;
+                    height: 26px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                p-touch := TouchArea {
+                    // mouse and arrows share one selection
+                    changed has-hover => { if self.has-hover { root.sel = i; } }
+
+                    width: parent.width;
+                    height: parent.height;
+
+                    clicked => { root.power-action(opt.action); }
+                }
+            }
+        }
+    }
+}
