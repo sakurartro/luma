@@ -1,10 +1,13 @@
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::thread;
 
+use crate::api;
+
 /// Per-user socket: shared /tmp would let users toggle (or block) each other.
-fn socket_path() -> PathBuf {
+pub fn socket_path() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty()) {
         Some(dir) => PathBuf::from(dir).join("luma-rust.sock"),
         None => PathBuf::from(format!("/tmp/luma-rust-{}.sock", unsafe { libc::getuid() })),
@@ -26,24 +29,33 @@ pub fn notify_running() -> bool {
 /// None = a live instance is already running.
 pub fn bind_socket() -> Option<UnixListener> {
     let path = socket_path();
-    match UnixListener::bind(&path) {
-        Ok(listener) => Some(listener),
+    let listener = match UnixListener::bind(&path) {
+        Ok(listener) => listener,
         Err(_) => {
             if UnixStream::connect(&path).is_ok() {
                 return None;
             }
             let _ = std::fs::remove_file(&path);
-            Some(UnixListener::bind(&path).expect("failed to bind toggle socket"))
+            UnixListener::bind(&path).expect("failed to bind toggle socket")
         }
-    }
+    };
+    // Search answers carry file paths; the /tmp fallback is reachable by other users.
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    Some(listener)
 }
 
 pub fn start_listener(listener: UnixListener, on_toggle: impl Fn() + Send + 'static) {
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
-            let mut buf = [0; 16];
-            if stream.read(&mut buf).unwrap_or(0) > 0 {
+            // Clients close their write side, so EOF ends the request.
+            let mut buf = Vec::new();
+            let _ = stream.read_to_end(&mut buf);
+            let request = String::from_utf8_lossy(&buf);
+            if let Some(query) = request.strip_prefix(api::CLIP_PREFIX) {
+                let query = query.to_string();
+                thread::spawn(move || api::handle_clip(stream, &query));
+            } else if !buf.is_empty() {
                 on_toggle();
             }
         }

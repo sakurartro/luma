@@ -23,7 +23,7 @@ The script downloads the binary into `~/.local/bin` (or a path of your choice: `
 ## Setup
 
 Luma does not grab global keys itself — on Wayland that is forbidden by
-protocol design. Bind a key to `luma_rust --toggle`: it shows/hides the window
+protocol design. Bind a key to `luma --toggle`: it shows/hides the window
 of the running instance; launching the binary again while an instance is live
 acts the same. A cold start without the flag opens the window right away.
 
@@ -34,11 +34,11 @@ not read `hyprland.conf`; the entry point is the Lua file) in
 `~/.config/hypr/bindings.lua`:
 
 ```ini
-bind = SUPER, Space, exec, luma_rust --toggle
+bind = SUPER, Space, exec, luma --toggle
 ```
 
 ```lua
-hl.bind("SUPER + SPACE", hl.dsp.exec_cmd("luma_rust --toggle"))
+hl.bind("SUPER + SPACE", hl.dsp.exec_cmd("luma --toggle"))
 ```
 
 **Floating window** for the app id `luma-rust` (Wayland apps cannot request
@@ -62,7 +62,7 @@ Reload afterwards: `hyprctl reload`.
 
 ```kdl
 binds {
-    Mod+Space { spawn "luma_rust" "--toggle"; }
+    Mod+Space { spawn "luma" "--toggle"; }
 }
 ```
 
@@ -80,11 +80,11 @@ switch), pick another combo — e.g. `SUPER, D` / `Mod+D` — and use it everywh
 
 ### GNOME / KDE (X11)
 
-**GNOME** — Settings → Keyboard → Custom Shortcuts, command `luma_rust --toggle`.
+**GNOME** — Settings → Keyboard → Custom Shortcuts, command `luma --toggle`.
 GNOME has no window rules; the window opens wherever the DE places it (force
 floating with an extension, e.g. *Try*).
 
-**KDE** — System Settings → Shortcuts → Add Custom Command `luma_rust --toggle`.
+**KDE** — System Settings → Shortcuts → Add Custom Command `luma --toggle`.
 Floating via Window Rules with Window class `luma-rust` (verify with `xprop`
 that the class matches on X11).
 
@@ -191,7 +191,7 @@ Light:
 cargo build --release
 ```
 
-Dev packages (Debian/Ubuntu naming): `libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libxcb1-dev`. Binary: `target/release/luma_rust`.
+Dev packages (Debian/Ubuntu naming): `libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libxcb1-dev`. Binary: `target/release/luma`.
 
 ## Troubleshooting
 
@@ -203,5 +203,5 @@ Dev packages (Debian/Ubuntu naming): `libxkbcommon-dev libfontconfig1-dev libgl1
 ## Uninstall
 
 ```sh
-rm ~/.local/bin/luma_rust && rm -rf ~/.config/luma ~/.cache/luma
+rm -f ~/.local/bin/luma ~/.local/bin/luma_rust && rm -rf ~/.config/luma ~/.cache/luma
 ```

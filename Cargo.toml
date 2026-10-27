@@ -3,6 +3,11 @@ name = "luma_rust"
 version = "0.2.0-beta.6"
 edition = "2024"
 
+# Package keeps its name; the command users type is `luma`.
+[[bin]]
+name = "luma"
+path = "src/main.rs"
+
 [dependencies]
 walkdir = "2"
 anyhow = "1"

@@ -5,7 +5,7 @@
 set -e
 
 repo="https://github.com/sakurartro/luma"
-bin="luma_rust"
+bin="luma"
 dest="${1:-$HOME/.local/bin}"
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -38,10 +38,14 @@ if ! curl -fsSL "$url" -o "$tmp"; then
 fi
 chmod +x "$tmp"
 mv -f "$tmp" "$dest/$bin"
+# Installs from before the rename: hotkeys still call luma_rust, keep it as a link.
+if [ -e "$dest/luma_rust" ]; then
+    ln -sf "$bin" "$dest/luma_rust"
+fi
 
 echo "Installed: $dest/$bin"
-if pgrep -x "$bin" >/dev/null 2>&1; then
-    echo "Note: an older Luma is still running; restart it: pkill -x $bin && $bin &"
+if pgrep -x "$bin" >/dev/null 2>&1 || pgrep -x luma_rust >/dev/null 2>&1; then
+    echo "Note: an older Luma is still running; restart it: pkill -x $bin; pkill -x luma_rust; $bin &"
 fi
 case ":$PATH:" in
     *":$dest:"*) ;;
