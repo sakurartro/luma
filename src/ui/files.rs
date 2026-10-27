@@ -153,15 +153,18 @@ pub(super) fn set_files(window: &MainWindow, items: Vec<FileItem>) {
 // name search, hidden names and repeats between the two are skipped.
 // Runs on worker threads, so it returns (entry, match kind, score) and the UI
 // thread builds the FileItems (slint::Image in them isn't Send).
+// generation: clip::next_query() taken on the UI thread for this keystroke.
 pub(super) fn extra_file_items(
     query: &str,
+    generation: u64,
     shown: &std::collections::HashSet<String>,
     hide_patterns: &[String],
     limit: usize,
 ) -> Vec<(FileEntry, i32, i32)> {
     let ocr_hits = ocr::ocr_search(query).into_iter().map(|(f, score)| (f, ocr::MATCH_OCR, score));
-    let clip_hits =
-        clip::clip_search(query).into_iter().map(|(f, score)| (f, clip::MATCH_SEMANTIC, score));
+    let clip_hits = clip::clip_search(query, generation)
+        .into_iter()
+        .map(|(f, score)| (f, clip::MATCH_SEMANTIC, score));
     let mut taken = std::collections::HashSet::new();
     ocr_hits
         .chain(clip_hits)
@@ -278,9 +281,11 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     let weak = weak.clone();
                     let query = query.clone();
                     let base_len = items.len();
+                    let generation = clip::next_query();
                     std::thread::spawn(move || {
                         let extra_items = extra_file_items(
                             query.as_str(),
+                            generation,
                             &fuzzy_paths,
                             &[],
                             MAX_RENDERED - base_len.min(MAX_RENDERED),
@@ -289,7 +294,11 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                             if let Some(window) = weak.upgrade() {
                                 // A newer keystroke or a files/photos
                                 // switch already replaced the model — discard.
-                                if window.get_input_text() == query && window.get_mode() == mode {
+                                // A stale generation may have skipped CLIP (see clip::is_stale).
+                                if window.get_input_text() == query
+                                    && window.get_mode() == mode
+                                    && !clip::is_stale(generation)
+                                {
                                     // the shown fuzzy rows, with any thumbnails they got
                                     let mut all: Vec<FileItem> =
                                         window.get_files().iter().take(base_len).collect();

@@ -125,9 +125,11 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     // owned copy: the Rc can't cross into the worker thread
                     let hide_patterns = hide_patterns.borrow().clone();
                     let base_len = file_items.len();
+                    let generation = clip::next_query();
                     std::thread::spawn(move || {
                         let extra_items = extra_file_items(
                             query.as_str(),
+                            generation,
                             &fuzzy_paths,
                             &hide_patterns,
                             MAX_MIXED - base_len.min(MAX_MIXED),
@@ -136,7 +138,15 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                             if let Some(window) = weak.upgrade() {
                                 // A newer keystroke already replaced the
                                 // model through the sync path — discard.
-                                if window.get_input_text() == query {
+                                // Same-text re-runs (refresh_view) are told
+                                // apart by the generation: a stale worker may
+                                // have skipped CLIP and must not overwrite.
+                                // Mode 0 only: a files/photos tab owns the
+                                // files model once switched to.
+                                if window.get_input_text() == query
+                                    && window.get_mode() == 0
+                                    && !clip::is_stale(generation)
+                                {
                                     // the shown fuzzy rows
                                     let mut all: Vec<FileItem> =
                                         window.get_files().iter().take(base_len).collect();
