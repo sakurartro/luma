@@ -71,7 +71,6 @@ fn update_model_progress(window: &MainWindow) {
 
 pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
     let Ctx { icon_cache, all_apps, all_files, files_db_version, last_files_load, hide_patterns, currency } = ctx;
-    let currency = *currency;
     main_window.on_search_all({
         let icon_cache = icon_cache.clone();
         let all_apps = all_apps.clone();
@@ -111,7 +110,7 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                 let file_items: Vec<FileItem> = fuzzy_hits
                     .iter()
                     .filter(|file| {
-                        !hide_patterns.iter().any(|p| file.name.starts_with(p.as_str()))
+                        !hide_patterns.borrow().iter().any(|p| file.name.starts_with(p.as_str()))
                     })
                     .take(MAX_MIXED)
                     .map(|f| build_file_item(f, clip::MATCH_NAME, 0))
@@ -123,7 +122,8 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     // on_search_files: append to the shown fuzzy results.
                     let weak = weak.clone();
                     let query = query.clone();
-                    let hide_patterns = hide_patterns.clone();
+                    // owned copy: the Rc can't cross into the worker thread
+                    let hide_patterns = hide_patterns.borrow().clone();
                     let base_len = file_items.len();
                     std::thread::spawn(move || {
                         let extra_items = extra_file_items(
@@ -154,9 +154,11 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
         }
     });
     let weak_query = main_window.as_weak();
+    let currency = currency.clone();
     main_window.on_run_query(move |text| {
         let weak = weak_query.clone();
         let text = text.to_string();
+        let currency = currency.get();
         std::thread::spawn(move || {
             // Runs on every keystroke: failures (offline, unknown code)
             // go to stderr, the plate just stays empty.

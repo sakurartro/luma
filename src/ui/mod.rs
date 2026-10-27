@@ -2,12 +2,12 @@ mod apps;
 mod files;
 mod power;
 mod search;
+mod settings;
 
 use crate::backend::apps::apps_search::App;
 use crate::backend::apps::db_init::DbState;
 use crate::backend::files::files_search::FileEntry;
-use crate::backend::settings;
-use crate::{MainWindow, Theme};
+use crate::MainWindow;
 use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
 use std::cell::{Cell, RefCell};
@@ -15,8 +15,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 pub use search::update_index_progress;
+pub use settings::remember_startup;
 
 // State shared by the callbacks of create_ui; each wire() clones what it needs.
+#[derive(Clone)]
 struct Ctx {
     icon_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
     all_apps: Rc<RefCell<Vec<App>>>,
@@ -25,8 +27,9 @@ struct Ctx {
     files_db_version: Rc<Cell<usize>>,
     // Throttle clock for files::load_files_if_stale
     last_files_load: Rc<Cell<Option<std::time::Instant>>>,
-    hide_patterns: Vec<String>,
-    currency: bool,
+    // Live settings, replaced by the settings menu
+    hide_patterns: Rc<RefCell<Vec<String>>>,
+    currency: Rc<Cell<bool>>,
 }
 
 // Deferred window creation (slint waits for the xdg-desktop-portal appearance
@@ -72,34 +75,22 @@ pub fn create_ui(db_state: DbState, visible: Rc<Cell<bool>>) -> Result<MainWindo
         return Err((anyhow::Error::from(err), db_state));
     }
 
-    let st = settings::load();
-    let hide_patterns = st.hide_patterns.clone();
-    let currency = st.currency;
-    let theme = main_window.global::<Theme>();
-    theme.set_bg(settings::parse_color(&st.bg));
-    theme.set_surface(settings::parse_color(&st.surface));
-    theme.set_hover(settings::parse_color(&st.hover));
-    theme.set_selected(settings::parse_color(&st.selected));
-    theme.set_border(settings::parse_color(&st.border));
-    theme.set_accent(settings::parse_color(&st.accent));
-    theme.set_text(settings::parse_color(&st.text));
-    theme.set_text_dim(settings::parse_color(&st.text_dim));
-    main_window.set_content_search(st.semantic || st.ocr);
-
     let ctx = Ctx {
         icon_cache: Rc::new(RefCell::new(HashMap::new())),
         all_apps: Rc::new(RefCell::new(Vec::new())),
         all_files: Rc::new(RefCell::new(Vec::new())),
         files_db_version: Rc::new(Cell::new(0)),
         last_files_load: Rc::new(Cell::new(None)),
-        hide_patterns,
-        currency,
+        hide_patterns: Rc::new(RefCell::new(Vec::new())),
+        currency: Rc::new(Cell::new(true)),
     };
+    settings::apply_settings(&main_window, &crate::backend::settings::load(), &ctx);
 
     power::wire(&main_window);
     apps::wire(&main_window, &ctx, db_state);
     files::wire(&main_window, &ctx);
     search::wire(&main_window, &ctx);
+    settings::wire(&main_window, &ctx);
 
     let weak_hide = main_window.as_weak();
     let visible_hide = visible.clone();

@@ -125,11 +125,16 @@ fn main() -> Result<()> {
         });
     }
 
+    // Read once on the main thread: the restart check of the settings menu
+    // compares against exactly what the indexers below were started with.
+    let st = settings::load();
+    ui::remember_startup(&st);
+
     // Heavy init in the background so the event loop (and the toggle socket)
     // is up in milliseconds; the drain timer picks up the result. Apps scan
     // first, then the state is handed to the UI — file indexing keeps going
     // in the background with progress reported via files_search::INDEX_*.
-    std::thread::spawn(|| {
+    std::thread::spawn(move || {
         let init = (|| -> Result<DbState> {
             let mut db_state = DbState::init()?;
             let icons = Apps::initial_icons_scan(&mut db_state.conn)?;
@@ -143,7 +148,6 @@ fn main() -> Result<()> {
                 *INIT_DB.lock().unwrap() = Some(db_state);
 
                 // Own connection: db_state.conn already moved to the UI side.
-                let st = settings::load();
                 let dirs = st.search_dirs;
                 match open_conn() {
                     Ok(mut conn) => {

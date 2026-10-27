@@ -111,6 +111,75 @@ fn with_missing_fields(text: &str, s: &Settings) -> Option<String> {
     (user.len() != before).then(|| serde_json::to_string_pretty(&user).ok()).flatten()
 }
 
+/// The file as a JSON object, keys in file order (settings menu).
+pub fn read_object() -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
+    let text = std::fs::read_to_string(settings_path())?;
+    Ok(serde_json::from_str(&text)?)
+}
+
+/// One edit from the settings menu.
+pub enum Change {
+    Toggle,
+    Text(String),
+    ListSet(usize, String),
+    ListAdd(String),
+    ListRemove(usize),
+}
+
+/// Applies the edit to the file and returns the new settings; the file is
+/// left untouched when it doesn't parse or the result isn't valid Settings.
+pub fn update(key: &str, change: Change) -> anyhow::Result<Settings> {
+    // canonical path: the rename below must replace a symlink's target, not the link
+    let path = std::fs::canonicalize(settings_path())?;
+    let (json, s) = with_change(&std::fs::read_to_string(&path)?, key, change)?;
+    // tmp + rename: a crash mid-write never leaves a truncated settings.json
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(s)
+}
+
+// Edits one key of the user's JSON; unknown keys and key order are kept.
+fn with_change(text: &str, key: &str, change: Change) -> anyhow::Result<(String, Settings)> {
+    use serde_json::Value;
+    let mut obj: serde_json::Map<String, Value> = serde_json::from_str(text)?;
+    let value = obj.get_mut(key).ok_or_else(|| anyhow::anyhow!("{key}: no such setting"))?;
+    // "" never enters a list: a "" hide pattern would hide every file (starts_with)
+    match (value, change) {
+        (Value::Bool(b), Change::Toggle) => *b = !*b,
+        (Value::String(s), Change::Text(new)) => {
+            if is_color(s) && !is_color(&new) {
+                anyhow::bail!("{key}: expected #RRGGBB, got {new:?}");
+            }
+            *s = new;
+        }
+        (Value::Array(items), Change::ListSet(i, new)) if i < items.len() => {
+            if new.is_empty() {
+                items.remove(i);
+            } else {
+                items[i] = Value::String(new);
+            }
+        }
+        (Value::Array(items), Change::ListAdd(new)) => {
+            if !new.is_empty() {
+                items.push(Value::String(new));
+            }
+        }
+        (Value::Array(items), Change::ListRemove(i)) if i < items.len() => {
+            items.remove(i);
+        }
+        _ => anyhow::bail!("{key}: unsupported change"),
+    }
+    let obj = Value::Object(obj);
+    let s = serde_json::from_value::<Settings>(obj.clone())?;
+    Ok((serde_json::to_string_pretty(&obj)?, s))
+}
+
+/// Exactly "#RRGGBB"; the menu shows a color swatch for these.
+pub fn is_color(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// "#RRGGBB" (leading '#' optional); anything else → black.
 pub fn parse_color(s: &str) -> Color {
     let hex = s.trim().trim_start_matches('#');
@@ -147,6 +216,71 @@ mod tests {
         // complete file -> no rewrite
         let full = serde_json::to_string(&s).unwrap();
         assert!(with_missing_fields(&full, &s).is_none());
+    }
+
+    fn template() -> String {
+        serde_json::to_string_pretty(&Settings::default()).unwrap()
+    }
+
+    fn change(text: &str, key: &str, c: Change) -> serde_json::Value {
+        serde_json::from_str(&with_change(text, key, c).unwrap().0).unwrap()
+    }
+
+    #[test]
+    fn change_toggles_bool() {
+        let json = change(&template(), "semantic", Change::Toggle);
+        assert_eq!(json["semantic"], true);
+    }
+
+    #[test]
+    fn change_with_wrong_type_is_rejected() {
+        assert!(with_change(&template(), "semantic", Change::Text("yes".into())).is_err());
+        assert!(with_change(&template(), "missing", Change::Toggle).is_err());
+        // a field that fails Settings validation blocks the write
+        let broken = template().replace(r#""currency": true"#, r#""currency": "yes""#);
+        assert!(with_change(&broken, "ocr", Change::Toggle).is_err());
+    }
+
+    #[test]
+    fn change_keeps_unknown_keys_and_order() {
+        let text = template().replacen('{', r#"{"zz_custom": [1, 2],"#, 1);
+        let out = with_change(&text, "accent", Change::Text("#123456".into())).unwrap().0;
+        let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(json["zz_custom"], serde_json::json!([1, 2]));
+        assert_eq!(json["accent"], "#123456");
+        let keys: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert_eq!(keys[0], "zz_custom");
+        assert_eq!(keys[1], "bg");
+    }
+
+    #[test]
+    fn change_edits_lists() {
+        let t = template();
+        let json = change(&t, "hide_patterns", Change::ListAdd("node_modules".into()));
+        assert_eq!(json["hide_patterns"], serde_json::json!([".", "node_modules"]));
+        let json = change(&t, "hide_patterns", Change::ListSet(0, "_".into()));
+        assert_eq!(json["hide_patterns"], serde_json::json!(["_"]));
+        let json = change(&t, "search_dirs", Change::ListRemove(1));
+        assert_eq!(json["search_dirs"], serde_json::json!(["~/Documents", "~/Desktop"]));
+        assert!(with_change(&t, "search_dirs", Change::ListRemove(9)).is_err());
+    }
+
+    #[test]
+    fn empty_list_item_is_removed_not_stored() {
+        let t = template();
+        let json = change(&t, "hide_patterns", Change::ListSet(0, "".into()));
+        assert_eq!(json["hide_patterns"], serde_json::json!([]));
+        let json = change(&t, "hide_patterns", Change::ListAdd("".into()));
+        assert_eq!(json["hide_patterns"], serde_json::json!(["."]));
+    }
+
+    #[test]
+    fn bad_color_is_rejected() {
+        let t = template();
+        for bad in ["#zzz", "#12345", "123456", "#1234567", ""] {
+            assert!(with_change(&t, "accent", Change::Text(bad.into())).is_err(), "{bad}");
+        }
+        assert_eq!(change(&t, "accent", Change::Text("#a1B2c3".into()))["accent"], "#a1B2c3");
     }
 
     #[test]

@@ -1,0 +1,229 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { SettingField } from "../types.slint";
+
+// Text field that commits on Enter and on focus loss. After a commit it shows
+// `value` again: the new one when Rust accepted the edit, the old one when not.
+component SettingInput inherits Rectangle {
+    in property <string> value;
+    in property <string> placeholder;
+    callback commit(string);
+
+    height: 28px;
+    horizontal-stretch: 1;
+    border-radius: 6px;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : Theme.border;
+
+    function submit() {
+        if input.text != root.value {
+            root.commit(input.text);
+            input.text = root.value;
+        }
+    }
+    // typing breaks the text binding, so model updates are pushed by hand
+    changed value => { input.text = root.value; }
+
+    input := TextInput {
+        x: 8px;
+        width: parent.width - 16px;
+        height: parent.height;
+        text: root.value;
+        color: Theme.text;
+        font-size: 13px;
+        vertical-alignment: center;
+        single-line: true;
+        accepted => { root.submit(); }
+        changed has-focus => {
+            if !self.has-focus { root.submit(); }
+        }
+    }
+
+    if input.text == "": Text {
+        x: 8px;
+        height: parent.height;
+        text: root.placeholder;
+        color: Theme.text-dim;
+        font-size: 13px;
+        vertical-alignment: center;
+    }
+}
+
+// Small bordered text button (Restart, "−").
+component SettingButton inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+
+    width: max(28px, label-text.preferred-width + 20px);
+    height: 28px;
+    border-radius: 6px;
+    background: touch.has-hover ? Theme.hover : Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    label-text := Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.label;
+        color: Theme.accent;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.clicked(); }
+    }
+}
+
+// mode 5: settings.json keys as rows; the file is the only state, Rust
+// rebuilds `settings` from it after every change.
+export component SettingsView {
+    in property <[SettingField]> settings;
+    in property <string> settings-error;
+    in property <bool> needs-restart;
+    callback setting-toggle(string);
+    callback setting-text(string, string);
+    callback setting-list-set(string, int, string);
+    callback setting-list-add(string, string);
+    callback setting-list-remove(string, int);
+    callback restart();
+
+    height: 350px;
+
+    VerticalLayout {
+        spacing: 8px;
+
+        if root.settings-error != "": Text {
+            text: root.settings-error;
+            color: Theme.accent;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        if root.needs-restart: HorizontalLayout {
+            spacing: 10px;
+
+            Text {
+                horizontal-stretch: 1;
+                text: "search_dirs / semantic / ocr apply after a restart";
+                color: Theme.text-dim;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+            SettingButton {
+                label: "Restart";
+                clicked => { root.restart(); }
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                padding-right: 12px;
+                spacing: 6px;
+
+                for field in root.settings: VerticalLayout {
+                    spacing: 6px;
+
+                    if field.heading != "": Text {
+                        text: field.heading;
+                        color: Theme.text-dim;
+                        font-size: 12px;
+                        height: 18px;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        Text {
+                            width: 130px;
+                            height: 28px;
+                            text: field.key;
+                            color: Theme.text;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+
+                        if field.kind == 0: HorizontalLayout {
+                            alignment: start;
+                            padding-top: 4px;
+                            padding-bottom: 4px;
+
+                            Rectangle {
+                                width: 36px;
+                                height: 20px;
+                                border-radius: 10px;
+                                background: field.on ? Theme.accent : Theme.selected;
+                                border-width: 1px;
+                                border-color: field.on ? Theme.accent : Theme.border;
+
+                                Rectangle {
+                                    x: field.on ? parent.width - self.width - 3px : 3px;
+                                    y: 3px;
+                                    width: 14px;
+                                    height: 14px;
+                                    border-radius: 7px;
+                                    background: field.on ? Theme.bg : Theme.text-dim;
+                                }
+                                TouchArea {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    clicked => { root.setting-toggle(field.key); }
+                                }
+                            }
+                        }
+
+                        if field.kind == 1 || field.kind == 2: HorizontalLayout {
+                            spacing: 8px;
+
+                            if field.kind == 1: Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 6px;
+                                background: field.color;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                            }
+                            SettingInput {
+                                value: field.text;
+                                commit(text) => { root.setting-text(field.key, text); }
+                            }
+                        }
+
+                        if field.kind == 3: VerticalLayout {
+                            spacing: 6px;
+
+                            for item[i] in field.items: HorizontalLayout {
+                                spacing: 8px;
+
+                                SettingInput {
+                                    value: item;
+                                    commit(text) => { root.setting-list-set(field.key, i, text); }
+                                }
+                                SettingButton {
+                                    label: "−";
+                                    clicked => { root.setting-list-remove(field.key, i); }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                SettingInput {
+                                    placeholder: "+ add";
+                                    commit(text) => { root.setting-list-add(field.key, text); }
+                                }
+                                // keeps the add field as wide as the item fields
+                                Rectangle { width: 28px; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

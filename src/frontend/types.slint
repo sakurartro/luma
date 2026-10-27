@@ -20,3 +20,17 @@ export struct FileItem {
     // match strength in 0-100 percent, only for match-kind 1 and 2
     match-score: int,
 }
+
+// One settings.json key in the settings menu, see ui/settings.rs
+export struct SettingField {
+    key: string,
+    // 0 = bool, 1 = "#RRGGBB" color, 2 = other string, 3 = list of strings
+    kind: int,
+    text: string,
+    // swatch for kind 1 (Slint can't parse "#RRGGBB" itself)
+    color: color,
+    on: bool,
+    items: [string],
+    // set on the first row of a menu section only
+    heading: string,
+}

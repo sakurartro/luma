@@ -235,7 +235,7 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     &window,
                     files_view(
                         &all_files.borrow(),
-                        &hide_patterns,
+                        &hide_patterns.borrow(),
                         window.get_files_sort(),
                         window.get_mode() == 4,
                     ),
