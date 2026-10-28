@@ -37,7 +37,7 @@ fn clip_response(query: &str) -> String {
 }
 
 const USAGE: &str = "usage: luma query clip [--limit N] \"<query>\" (default limit 5)";
-const DEFAULT_LIMIT: usize = 5;
+pub const DEFAULT_LIMIT: usize = 5;
 
 // Args after `query clip`: `--limit N` anywhere, the rest is the query.
 fn parse_clip_args(args: &[String]) -> Result<(String, usize)> {
@@ -68,6 +68,13 @@ pub fn run_query(args: &[String]) -> Result<()> {
         None => return Err(anyhow!(USAGE)),
     }
     let (query, limit) = parse_clip_args(&args[1..])?;
+    println!("{}", clip_hits(&query, limit)?);
+    Ok(())
+}
+
+/// Client side, shared by the CLI and MCP: the daemon's hits, best first, cut
+/// to `limit`; Err when Luma is not running or answers with an error.
+pub fn clip_hits(query: &str, limit: usize) -> Result<serde_json::Value> {
     let mut stream =
         UnixStream::connect(socket_path()).map_err(|_| anyhow!("Luma is not running"))?;
     stream.write_all(format!("{CLIP_PREFIX}{query}").as_bytes())?;
@@ -84,8 +91,7 @@ pub fn run_query(args: &[String]) -> Result<()> {
     if let Some(hits) = value.as_array_mut() {
         hits.truncate(limit);
     }
-    println!("{value}");
-    Ok(())
+    Ok(value)
 }
 
 #[cfg(test)]
