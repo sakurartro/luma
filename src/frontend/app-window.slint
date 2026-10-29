@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { AppItem, FileItem, SettingField } from "types.slint";
+import { AgentRow, AppItem, FileItem, SettingField } from "types.slint";
 import { ModeButton, ProgressBar } from "widgets.slint";
 import { AppsView } from "views/apps.slint";
 import { FilesView } from "views/files.slint";
@@ -7,7 +7,7 @@ import { PowerView } from "views/power.slint";
 import { MixedView } from "views/mixed.slint";
 import { SettingsView } from "views/settings.slint";
 
-export { Theme, AppItem, FileItem, SettingField }
+export { Theme, AgentRow, AppItem, FileItem, SettingField }
 
 // Omarchy/Walker-ish restyle of the Spotlight layout.
 
@@ -37,12 +37,15 @@ export component MainWindow inherits Window {
     in property <[SettingField]> settings;
     in property <string> settings-error;
     in property <bool> needs-restart;
+    in property <[AgentRow]> agents;
+    in property <bool> agents-idle;
     callback show-settings();
     callback setting-toggle(string);
     callback setting-text(string, string);
     callback setting-list-set(string, int, string);
     callback setting-list-add(string, string);
     callback setting-list-remove(string, int);
+    callback agent-toggle(int);
     callback restart();
 
     // keyboard selection; in mode 0 it runs through apps first, then files
@@ -406,6 +409,9 @@ if root.input-text == "": Text {
                 settings: root.settings;
                 settings-error: root.settings-error;
                 needs-restart: root.needs-restart;
+                agents: root.agents;
+                agents-idle: root.agents-idle;
+                agent-toggle(i) => { root.agent-toggle(i); }
                 setting-toggle(key) => { root.setting-toggle(key); }
                 setting-text(key, text) => { root.setting-text(key, text); }
                 setting-list-set(key, i, text) => { root.setting-list-set(key, i, text); }

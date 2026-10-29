@@ -21,6 +21,14 @@ export struct FileItem {
     match-score: int,
 }
 
+// One row of the Agents section in the settings menu, see ui/settings.rs
+export struct AgentRow {
+    name: string,
+    status: string,
+    // button label ("Connect" / "Disconnect"); "" = no button
+    action: string,
+}
+
 // One settings.json key in the settings menu, see ui/settings.rs
 export struct SettingField {
     key: string,

@@ -1,6 +1,6 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { SettingField } from "../types.slint";
+import { AgentRow, SettingField } from "../types.slint";
 
 // Text field that commits on Enter and on focus loss. After a commit it shows
 // `value` again: the new one when Rust accepted the edit, the old one when not.
@@ -84,6 +84,9 @@ export component SettingsView {
     in property <[SettingField]> settings;
     in property <string> settings-error;
     in property <bool> needs-restart;
+    in property <[AgentRow]> agents;
+    in property <bool> agents-idle;
+    callback agent-toggle(int);
     callback setting-toggle(string);
     callback setting-text(string, string);
     callback setting-list-set(string, int, string);
@@ -125,6 +128,52 @@ export component SettingsView {
             VerticalLayout {
                 padding-right: 12px;
                 spacing: 6px;
+
+                VerticalLayout {
+                    spacing: 6px;
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        Text {
+                            text: "Agents";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            height: 18px;
+                        }
+                        if root.agents-idle: Text {
+                            horizontal-stretch: 1;
+                            text: "won't work while semantic and ocr are off";
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            overflow: elide;
+                        }
+                    }
+                    for agent[i] in root.agents: HorizontalLayout {
+                        spacing: 10px;
+
+                        Text {
+                            width: 130px;
+                            height: 28px;
+                            text: agent.name;
+                            color: Theme.text;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: agent.status;
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                        if agent.action != "": SettingButton {
+                            label: agent.action;
+                            clicked => { root.agent-toggle(i); }
+                        }
+                    }
+                }
 
                 for field in root.settings: VerticalLayout {
                     spacing: 6px;

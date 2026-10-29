@@ -52,9 +52,9 @@ pub fn start_listener(listener: UnixListener, on_toggle: impl Fn() + Send + 'sta
             let mut buf = Vec::new();
             let _ = stream.read_to_end(&mut buf);
             let request = String::from_utf8_lossy(&buf);
-            if let Some(query) = request.strip_prefix(api::CLIP_PREFIX) {
+            if let Some((kind, query)) = api::parse_request(&request) {
                 let query = query.to_string();
-                thread::spawn(move || api::handle_clip(stream, &query));
+                thread::spawn(move || api::handle_search(stream, kind, &query));
             } else if !buf.is_empty() {
                 on_toggle();
             }

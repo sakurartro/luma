@@ -1,12 +1,12 @@
 // MCP server for AI agents: `luma mcp`. The agent starts it as a subprocess and
 // speaks newline-delimited JSON-RPC over stdin/stdout. Handwritten: one tool
-// doesn't need an SDK. The search itself is api::clip_hits, same as `luma query`.
+// doesn't need an SDK. The searches themselves are api::hits, same as `luma query`.
 //
 // Serves both protocol eras: legacy clients open with `initialize` (2025-11-25
 // and earlier), modern ones put the version into every request's `_meta`
 // (2026-07-28) and may probe with `server/discover` first.
 
-use crate::api;
+use crate::api::{self, Kind};
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 
@@ -15,7 +15,16 @@ const MODERN: &str = "2026-07-28";
 const LEGACY: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const VERSION_KEY: &str = "io.modelcontextprotocol/protocolVersion";
 
-const TOOL: &str = "luma_search_images";
+const TOOL_IMAGES: &str = "luma_search_images";
+const TOOL_TEXT: &str = "luma_search_text";
+
+// Reaches the model with the server's name even when the tools themselves are
+// deferred (Claude Code shows only their names until it loads the schemas), so
+// it is the one place that makes the agent think of Luma first.
+const INSTRUCTIONS: &str = "Luma has already indexed the user's photos and screenshots on this \
+    computer. When the user wants to find a photo, picture or screenshot, call \
+    luma_search_images (what it shows) or luma_search_text (words written on it) FIRST, \
+    before find, grep, ls or running OCR yourself: it answers in under a second.";
 
 /// `luma mcp`: answers until the agent closes stdin. Nothing but protocol
 /// messages may go to stdout.
@@ -53,19 +62,26 @@ fn handle(msg: &Value) -> Option<Value> {
         "initialize" => {
             let asked = params["protocolVersion"].as_str().unwrap_or("");
             let agreed = if LEGACY.contains(&asked) { asked } else { LEGACY[0] };
-            json!({"protocolVersion": agreed, "capabilities": {"tools": {}}, "serverInfo": server_info()})
+            json!({"protocolVersion": agreed, "capabilities": {"tools": {}}, "serverInfo": server_info(), "instructions": INSTRUCTIONS})
         }
         "server/discover" => json!({
             "supportedVersions": [MODERN],
             "capabilities": {"tools": {}},
             "_meta": {"io.modelcontextprotocol/serverInfo": server_info()},
+            "instructions": INSTRUCTIONS,
         }),
         "ping" => json!({}),
-        "tools/list" => json!({"tools": [tool()]}),
-        "tools/call" if params["name"] == TOOL => search(&params["arguments"]),
+        "tools/list" => json!({"tools": [images_tool(), text_tool()]}),
         "tools/call" => {
-            let msg = format!("Unknown tool: {}", params["name"]);
-            return Some(error(id, -32602, &msg, None));
+            let kind = match params["name"].as_str() {
+                Some(TOOL_IMAGES) => Kind::Clip,
+                Some(TOOL_TEXT) => Kind::Ocr,
+                _ => {
+                    let msg = format!("Unknown tool: {}", params["name"]);
+                    return Some(error(id, -32602, &msg, None));
+                }
+            };
+            search(kind, &params["arguments"])
         }
         _ => return Some(error(id, -32601, &format!("Method not found: {method}"), None)),
     };
@@ -87,28 +103,64 @@ fn error(id: Value, code: i32, message: &str, data: Option<Value>) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": error})
 }
 
-// The description is all the agent knows about the tool: keep it in sync with
-// agent/skills/luma/SKILL.md.
-fn tool() -> Value {
-    json!({
-        "name": TOOL,
-        "title": "Search photos by content",
-        "description": "ALWAYS call this FIRST whenever the user wants to find, locate or show a \
+// The descriptions are all the agent knows about the tools: keep them in sync
+// with agent/skills/luma/SKILL.md.
+fn images_tool() -> Value {
+    tool(
+        TOOL_IMAGES,
+        "Search photos by content",
+        "ALWAYS call this FIRST whenever the user wants to find, locate or show a \
             photo, picture or image of anything (a person, animal, place, object, scene; any \
             language, e.g. \"photo of a bear\", \"где фотка тигра\"). File names rarely describe \
             what a photo shows, so find/ls/grep on names will miss it. This searches by what is \
             visible in the image (CLIP) in under a second. Translate the request to English and \
-            describe what is visible (\"brown bear in a forest\"). Returns JSON [{\"path\", \
-            \"score\"}], best first; score 0-100 is relative within one answer, and 50+ is often \
-            a real match. [] means nothing matched: rephrase before giving up. Matches are \
-            similar-looking, not guaranteed: open the top 2-3 hits and look at the image itself. \
-            Never reject a hit because of its file name, and never say nothing was found before \
-            you have opened the top hits. Only folders in search_dirs of ~/.config/luma/settings.json are indexed. Needs \
+            describe what is visible (\"brown bear in a forest\"). For a screenshot or document \
+            the user remembers by the words written on it, use luma_search_text instead. Returns \
+            JSON [{\"path\", \"score\"}], best first; score 0-100 is relative within one answer, \
+            and 50+ is often a real match. [] means nothing matched: rephrase before giving up. \
+            Matches are similar-looking, not guaranteed. If the top hit scores 50+ and is clearly \
+            ahead of the second, trust it: give its path without opening it. If scores are low or \
+            close, or the user wants a specific person, place or detail, open the top 1-2 hits and \
+            look at the image itself. Never reject a hit because of its file name, and never say \
+            nothing was found before you have opened the top hits of a low-scoring answer. Only \
+            folders in search_dirs of ~/.config/luma/settings.json are indexed. Needs \
             \"agent_api\": true there.",
+        "What is in the picture, in English",
+    )
+}
+
+fn text_tool() -> Value {
+    tool(
+        TOOL_TEXT,
+        "Search images by the text on them",
+        "Find a screenshot, photo of a document, receipt, sign or slide by the TEXT written \
+            on it (OCR), in under a second. Use it when the user remembers words that appear in \
+            the image: an error message, a name, a number, a title (\"the screenshot with \
+            connection refused\"). To find an image by what it SHOWS use luma_search_images \
+            instead; if one of the two finds nothing, try the other. The query is the words as \
+            they are written on the image: no translation, no description. Only English text is \
+            recognized, so text in other languages will not be found. Words shorter than 3 \
+            letters are ignored; a few distinctive words work better than a sentence. Returns \
+            JSON [{\"path\", \"score\"}], best first; score 0-100 is how much of the query was \
+            found in the image's text, 100 = every word exactly. A score of 100 means the words \
+            are really on that image: trust it. Open the hit only to read the text itself or \
+            when scores are lower (the text is not returned). [] means no image has that text: \
+            try other words from the same text, or luma_search_images. Only folders in \
+            search_dirs of ~/.config/luma/settings.json are indexed. Needs \"agent_api\": true \
+            and \"ocr\": true there.",
+        "Words written on the image, as written (English)",
+    )
+}
+
+fn tool(name: &str, title: &str, description: &str, query_help: &str) -> Value {
+    json!({
+        "name": name,
+        "title": title,
+        "description": description,
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "What is in the picture, in English"},
+                "query": {"type": "string", "description": query_help},
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
@@ -124,7 +176,7 @@ fn tool() -> Value {
 
 // Bad arguments and search failures go back to the model as isError (not
 // JSON-RPC errors), so it can retry or tell the user how to fix Luma.
-fn search(args: &Value) -> Value {
+fn search(kind: Kind, args: &Value) -> Value {
     let query = args["query"].as_str().unwrap_or("").trim();
     if query.is_empty() {
         return text_result("query must be a non-empty string", true);
@@ -136,7 +188,7 @@ fn search(args: &Value) -> Value {
     let Some(limit) = limit else {
         return text_result("limit must be a positive integer", true);
     };
-    match api::clip_hits(query, limit) {
+    match api::hits(kind, query, limit) {
         Ok(hits) => text_result(&hits.to_string(), false),
         Err(e) => text_result(&e.to_string(), true),
     }
@@ -167,6 +219,16 @@ mod tests {
     }
 
     #[test]
+    fn both_handshakes_carry_instructions_naming_the_tools() {
+        let legacy = request("initialize", json!({"protocolVersion": LEGACY[0]}));
+        let modern = request("server/discover", modern(json!({})));
+        for result in [&legacy["result"], &modern["result"]] {
+            let text = result["instructions"].as_str().unwrap();
+            assert!(text.contains(TOOL_IMAGES) && text.contains(TOOL_TEXT));
+        }
+    }
+
+    #[test]
     fn notifications_and_responses_get_no_answer() {
         assert!(handle(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).is_none());
         assert!(handle(&json!({"jsonrpc": "2.0", "id": 1, "result": {}})).is_none());
@@ -179,7 +241,8 @@ mod tests {
         assert_eq!(discover["result"]["resultType"], "complete");
 
         let list = request("tools/list", modern(json!({})));
-        assert_eq!(list["result"]["tools"][0]["name"], TOOL);
+        let names: Vec<_> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].clone()).collect();
+        assert_eq!(names, [TOOL_IMAGES, TOOL_TEXT]);
         // Legacy answers stay as they were.
         assert!(request("tools/list", json!({}))["result"].get("resultType").is_none());
 
@@ -193,9 +256,11 @@ mod tests {
         assert_eq!(request("nope", json!({}))["error"]["code"], -32601);
         assert_eq!(request("tools/call", json!({"name": "rm_rf"}))["error"]["code"], -32602);
         // Argument errors stop before the socket, so no daemon is needed.
-        let call = |args: Value| request("tools/call", json!({"name": TOOL, "arguments": args}))["result"].clone();
+        let call = |args: Value| request("tools/call", json!({"name": TOOL_IMAGES, "arguments": args}))["result"].clone();
         assert_eq!(call(json!({"query": "  "}))["isError"], true);
         assert_eq!(call(json!({"query": "cat", "limit": 0}))["isError"], true);
         assert_eq!(call(json!({"query": "cat", "limit": "5"}))["isError"], true);
+        let text = request("tools/call", json!({"name": TOOL_TEXT, "arguments": {"query": ""}}));
+        assert_eq!(text["result"]["isError"], true);
     }
 }

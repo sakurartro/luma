@@ -1,6 +1,6 @@
 ---
 name: luma
-description: Find photos and images on this computer by what is in them (e.g. "the photo of a river in fog", "a picture of my cat on the windowsill") using the running Luma launcher's semantic (CLIP) index. Use instead of find/grep/ls when the user asks to find an image, photo or picture by its content.
+description: Find photos and images on this computer by what is in them (e.g. "the photo of a river in fog", "a picture of my cat on the windowsill") or by the text written on them (e.g. "the screenshot with connection refused") using the running Luma launcher's semantic (CLIP) and OCR indexes. Use instead of find/grep/ls when the user asks to find an image, photo, picture or screenshot by its content or its text.
 ---
 
 # Luma: search images by meaning
@@ -32,11 +32,40 @@ Output is one JSON line on stdout, best match first:
 answer, don't treat a number as a fixed threshold. `[]` means nothing matched
 well enough — rephrase the query (more concrete, fewer words) before giving up.
 
+## Search by the text on the image
+
+For screenshots, documents, receipts, signs: the user remembers words that
+are written in the picture.
+
+```bash
+luma query ocr "connection refused"
+luma query ocr --limit 10 "invoice 2024"
+```
+
+- **Use the words exactly as they would be written on the image.** No
+  translation and no description. Only English text is recognized; text in
+  other languages is not found.
+- Words shorter than 3 letters are ignored. A few distinctive words beat a
+  whole sentence.
+- Same output as above. `score` is how much of the query was found in the
+  image's text; 100 means every word is there exactly, so trust it. The
+  recognized text itself is not returned: open the image to read it.
+- `[]` means no image has that text: try other words from the same text, or
+  search by content with `luma query clip`.
+
+Which one: what the picture **shows** → `clip`; what is **written** on it → `ocr`.
+If one finds nothing, try the other.
+
 ## Check before you answer
 
-CLIP finds similar-looking images, not guaranteed matches. Open the top few
-hits (read the image files) and confirm they show what the user asked for
-before presenting them. If none fit, say so and try another phrasing.
+CLIP finds similar-looking images, not guaranteed matches.
+
+- Top hit scores 50+ and is clearly ahead of the second: trust it and give the
+  path; no need to open the image.
+- Scores low or close together, or the user wants a specific person, place or
+  detail: open the top 1-2 hits (read the image files) and confirm they show
+  what was asked before presenting them.
+- None fit: say so and try another phrasing.
 
 ## What is searched
 
@@ -56,6 +85,7 @@ edit their settings or start Luma without asking.
 |---|---|
 | `Luma is not running` | Start the Luma launcher (`luma`), then retry. |
 | `semantic search is not available: ...` | Either `"semantic": true` is not set in `~/.config/luma/settings.json` (set it, restart Luma; it downloads ~154 MB of models and indexes photos in the background), or indexing is still running — wait and retry. |
+| `text search is not available: ...` | Either `"ocr": true` is not set in `~/.config/luma/settings.json` (set it, restart Luma; it downloads ~12 MB of models and reads the text of photos in the background, after semantic indexing), or that is still running — wait and retry. |
 | `agent API is disabled: ...` | The user must set `"agent_api": true` in `~/.config/luma/settings.json` and restart Luma. |
 | `unexpected answer from Luma (an older version still running?)` | An old Luma daemon is running; restart Luma. |
 | `luma: command not found` | Luma isn't installed or not on `PATH`; use normal file tools. |

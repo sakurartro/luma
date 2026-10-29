@@ -9,4 +9,4 @@ mod preprocess;
 mod search;
 
 pub use index::{start_indexing, OCR_DL_DONE, OCR_DL_TOTAL, OCR_DONE, OCR_TOTAL};
-pub use search::{ocr_search, MATCH_OCR};
+pub use search::{ocr_ready, ocr_search, MATCH_OCR};

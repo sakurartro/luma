@@ -8,6 +8,7 @@ use crate::backend::apps::fuzzy::is_match;
 use crate::backend::files::files_search::FileEntry;
 use rusqlite::Connection;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // match_kind in FileItem: the file was found by the text on it.
 pub const MATCH_OCR: i32 = 2;
@@ -28,6 +29,14 @@ struct OcrDoc {
 // Snapshot of ocr_text joined with files; filled by the indexing worker
 // (reload) at its start and end, empty while the feature is off.
 static DOCS: Mutex<Vec<OcrDoc>> = Mutex::new(Vec::new());
+
+// The snapshot was loaded at least once. Before that an empty answer is not
+// "no match" but "not indexed yet / feature off" (the agent API tells them apart).
+static LOADED: AtomicBool = AtomicBool::new(false);
+
+pub fn ocr_ready() -> bool {
+    LOADED.load(Ordering::Acquire)
+}
 
 fn words(text: &str) -> Vec<Vec<char>> {
     text.split(|c: char| !c.is_alphanumeric())
@@ -64,6 +73,7 @@ fn load_docs(conn: &Connection) -> Vec<OcrDoc> {
 
 pub(super) fn reload(conn: &Connection) {
     *DOCS.lock().unwrap() = load_docs(conn);
+    LOADED.store(true, Ordering::Release);
 }
 
 // How well the query matched, averaged over query words: each takes its best
