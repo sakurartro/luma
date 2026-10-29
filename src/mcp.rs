@@ -93,15 +93,18 @@ fn tool() -> Value {
     json!({
         "name": TOOL,
         "title": "Search photos by content",
-        "description": "Find photos and images on this computer by what is in them \
-            (e.g. \"river in fog\", \"cat on a windowsill\") using the running Luma launcher's \
-            semantic (CLIP) index. Sub-second; use instead of find/grep/ls when the user asks \
-            for a picture by its content. Write the query in English (translate first) and \
-            describe what is visible, not file names or dates. Returns JSON [{\"path\", \"score\"}], \
-            best first; score 0-100 is relative within one answer. [] means nothing matched: \
-            rephrase before giving up. Matches are similar-looking, not guaranteed: open the top \
-            hits and confirm before answering. Only folders in search_dirs of \
-            ~/.config/luma/settings.json are indexed.",
+        "description": "ALWAYS call this FIRST whenever the user wants to find, locate or show a \
+            photo, picture or image of anything (a person, animal, place, object, scene; any \
+            language, e.g. \"photo of a bear\", \"где фотка тигра\"). File names rarely describe \
+            what a photo shows, so find/ls/grep on names will miss it. This searches by what is \
+            visible in the image (CLIP) in under a second. Translate the request to English and \
+            describe what is visible (\"brown bear in a forest\"). Returns JSON [{\"path\", \
+            \"score\"}], best first; score 0-100 is relative within one answer, and 50+ is often \
+            a real match. [] means nothing matched: rephrase before giving up. Matches are \
+            similar-looking, not guaranteed: open the top 2-3 hits and look at the image itself. \
+            Never reject a hit because of its file name, and never say nothing was found before \
+            you have opened the top hits. Only folders in search_dirs of ~/.config/luma/settings.json are indexed. Needs \
+            \"agent_api\": true there.",
         "inputSchema": {
             "type": "object",
             "properties": {
