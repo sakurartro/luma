@@ -16,18 +16,22 @@ pub const CLIP_PREFIX: &str = "clip ";
 
 /// Daemon side, on its own thread: CLIP inference must not hold up toggles.
 pub fn handle_clip(mut stream: UnixStream, query: &str) {
-    let _ = stream.write_all(clip_response(query).as_bytes());
+    let _ = stream.write_all(clip_response(query, &settings::load()).as_bytes());
 }
 
 // `[{"path", "score"}]` best first (score 0-100), or `{"error"}`.
-fn clip_response(query: &str) -> String {
+fn clip_response(query: &str, settings: &settings::Settings) -> String {
+    if !settings.agent_api {
+        return json!({"error": "agent API is disabled: set \"agent_api\": true in ~/.config/luma/settings.json and restart Luma"})
+            .to_string();
+    }
     // clip_search can't tell "no hits" from "not loaded": both are empty.
     if !clip::clip_ready() {
         return json!({"error": "semantic search is not available: enable \"semantic\" in settings.json or wait for indexing to finish"})
             .to_string();
     }
     // UI hides these only in its own views, so the API applies them itself.
-    let hide_patterns = settings::load().hide_patterns;
+    let hide_patterns = &settings.hide_patterns;
     let hits: Vec<_> = clip::clip_search(query, clip::NEVER_STALE)
         .into_iter()
         .filter(|(f, _)| !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str())))
@@ -99,10 +103,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn disabled_by_default() {
+        let value: serde_json::Value =
+            serde_json::from_str(&clip_response("cat", &settings::Settings::default())).unwrap();
+        assert!(value["error"].as_str().unwrap().starts_with("agent API is disabled"));
+    }
+
+    #[test]
     fn not_ready_answers_with_error() {
         // MODELS is never loaded in tests.
-        let value: serde_json::Value = serde_json::from_str(&clip_response("cat")).unwrap();
-        assert!(value.get("error").is_some());
+        let on = settings::Settings { agent_api: true, ..Default::default() };
+        let value: serde_json::Value = serde_json::from_str(&clip_response("cat", &on)).unwrap();
+        assert!(value["error"].as_str().unwrap().starts_with("semantic search is not available"));
     }
 
     #[test]
