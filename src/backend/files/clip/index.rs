@@ -78,7 +78,7 @@ const MODEL_FILES: [(&str, &str); 3] = [
 ];
 
 // DB rows read per pass; a multiple of INFERENCE_BATCH.
-const DB_CHUNK: usize = 256;
+const DB_CHUNK: usize = 16;
 
 // Cosine similarity -> UI percent: SEMANTIC_MIN_SCORE maps to 0,
 // SEMANTIC_MAX_SCORE to 100, values outside are clamped.
