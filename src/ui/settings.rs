@@ -2,6 +2,8 @@ use crate::backend::settings::{self, Change, Settings};
 use crate::{AgentRow, MainWindow, SettingField, Theme};
 use serde_json::Value;
 use slint::{ComponentHandle, Model, SharedString, VecModel};
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -195,7 +197,10 @@ fn edit_opencode(exe: Option<&str>) -> anyhow::Result<()> {
     }
     // tmp + rename: a crash mid-write never leaves a truncated config
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
+    // tmp is born with the original's mode: opencode.json may hold API keys (0600)
+    let mode = std::fs::metadata(&path).map(|m| m.permissions().mode()).unwrap_or(0o666);
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(&tmp)?.write_all(json.as_bytes())?;
     std::fs::rename(&tmp, &path)?;
     Ok(())
 }
@@ -264,6 +269,8 @@ fn remove(agent: &Agent) -> anyhow::Result<()> {
 fn connect_agent(agent: &Agent) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
     let exe = exe.to_string_lossy();
+    // Binary replaced by an update while running: the path itself holds the new one.
+    let exe = exe.strip_suffix(" (deleted)").unwrap_or(&exe);
     match agent.backend {
         Backend::Cli(scope) => {
             // add fails when luma is already registered (e.g. pointing at an old binary)

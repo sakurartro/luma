@@ -50,7 +50,7 @@ fn error(message: &str) -> String {
 // `[{"path", "score"}]` best first (score 0-100), or `{"error"}`.
 fn search_response(kind: Kind, query: &str, settings: &settings::Settings) -> String {
     if !settings.agent_api {
-        return error("agent API is disabled: set \"agent_api\": true in ~/.config/luma/settings.json and restart Luma");
+        return error("agent API is disabled: set \"agent_api\": true in ~/.config/luma/settings.json (no restart needed)");
     }
     let hits = match kind {
         // clip_search can't tell "no hits" from "not loaded": both are empty.

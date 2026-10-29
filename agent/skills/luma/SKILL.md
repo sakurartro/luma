@@ -86,6 +86,6 @@ edit their settings or start Luma without asking.
 | `Luma is not running` | Start the Luma launcher (`luma`), then retry. |
 | `semantic search is not available: ...` | Either `"semantic": true` is not set in `~/.config/luma/settings.json` (set it, restart Luma; it downloads ~154 MB of models and indexes photos in the background), or indexing is still running — wait and retry. |
 | `text search is not available: ...` | Either `"ocr": true` is not set in `~/.config/luma/settings.json` (set it, restart Luma; it downloads ~12 MB of models and reads the text of photos in the background, after semantic indexing), or that is still running — wait and retry. |
-| `agent API is disabled: ...` | The user must set `"agent_api": true` in `~/.config/luma/settings.json` and restart Luma. |
+| `agent API is disabled: ...` | The user must set `"agent_api": true` in `~/.config/luma/settings.json` (no restart needed). |
 | `unexpected answer from Luma (an older version still running?)` | An old Luma daemon is running; restart Luma. |
 | `luma: command not found` | Luma isn't installed or not on `PATH`; use normal file tools. |

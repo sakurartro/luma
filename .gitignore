@@ -7,3 +7,4 @@ models/
 CLAUDE.md 
 .claude/
 /bench/results/
+__pycache__/

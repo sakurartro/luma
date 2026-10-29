@@ -4,12 +4,14 @@
 use super::inference::{models_dir, OcrModels};
 use super::search;
 use crate::backend::apps::db_init::open_conn;
-use crate::backend::files::clip::CLIP_DONE;
+use crate::backend::files::clip::{CLIP_DONE, ONNX_LOCK};
 use crate::backend::files::download::ensure_models;
 use crate::backend::files::files_search::{image_where, SCAN_COMPLETE};
 use anyhow::Result;
 use rusqlite::{params, Connection};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 // Progress, same polling style as EMB_* in clip; shown by main.rs.
 pub static OCR_TOTAL: AtomicUsize = AtomicUsize::new(0);
@@ -79,74 +81,122 @@ pub fn start_indexing(ocr: bool) {
     if !ocr {
         return;
     }
-    std::thread::spawn(|| {
-        // After clip is done (or off): one ONNX session and one CPU-heavy
-        // worker at a time. Needs clip::start_indexing to be called, it sets
-        // the flag even when `semantic` is off.
-        while !CLIP_DONE.load(Ordering::Acquire) {
-            std::thread::sleep(std::time::Duration::from_millis(500));
+    OCR_ON.store(true, Ordering::Relaxed);
+    std::thread::spawn(|| index_pass(false));
+}
+
+// Same debounce as clip::schedule_reindex: one pass per burst of new photos.
+const REINDEX_DELAY: Duration = Duration::from_secs(10);
+static OCR_ON: AtomicBool = AtomicBool::new(false);
+static LAST_PHOTO_EVENT: Mutex<Option<Instant>> = Mutex::new(None);
+static REINDEX_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Called by the files watcher for a created/changed photo. After
+/// REINDEX_DELAY of quiet it runs one more pass, which loads the models only
+/// if some photo lacks fresh text.
+pub fn schedule_reindex() {
+    if !OCR_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut last = LAST_PHOTO_EVENT.lock().unwrap();
+    *last = Some(Instant::now());
+    if REINDEX_PENDING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    std::thread::spawn(|| loop {
+        let Some(last) = *LAST_PHOTO_EVENT.lock().unwrap() else { return };
+        let wait = REINDEX_DELAY.saturating_sub(last.elapsed());
+        if !wait.is_zero() {
+            std::thread::sleep(wait);
+            continue;
         }
-        if !ensure_models("ocr", &models_dir(), &MODEL_FILES, &OCR_DL_TOTAL, &OCR_DL_DONE) {
+        let started = Instant::now();
+        index_pass(true);
+        // Under the lock so an event can't land between the check and the flag.
+        let last = LAST_PHOTO_EVENT.lock().unwrap();
+        if last.is_none_or(|t| t <= started) {
+            REINDEX_PENDING.store(false, Ordering::Relaxed);
             return;
         }
-        let Some(mut models) = OcrModels::load() else { return };
-        let Ok(mut conn) = open_conn() else { return };
-
-        if SCAN_COMPLETE.load(Ordering::Relaxed) {
-            if let Err(err) = delete_orphans(&conn) {
-                eprintln!("ocr orphan cleanup error: {err}");
-            }
-        }
-
-        // Texts from earlier runs are searchable while the rest is indexed.
-        search::reload(&conn);
-
-        let total_sql = format!(
-            "SELECT COUNT(*) FROM files f LEFT JOIN ocr_text o
-             ON o.file_path = f.path AND o.mtime = f.mtime
-             WHERE o.file_path IS NULL AND {}",
-            image_where()
-        );
-        let total = conn.query_row(&total_sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
-        OCR_TOTAL.store(total.max(0) as usize, Ordering::Relaxed);
-        OCR_DONE.store(0, Ordering::Relaxed);
-
-        let mut after = String::new();
-        loop {
-            let Ok(chunk) = fetch_candidates(&conn, &after, DB_CHUNK) else { break };
-            let Some((last, _)) = chunk.last() else { break };
-            after = last.clone();
-            // A failed file is skipped without a row, so the next start retries it.
-            // A panicking one (decoder, ndarray index) gets an empty row instead:
-            // otherwise every start would die on it and never reach the files after.
-            let rows: Vec<(String, i64, String)> = chunk
-                .iter()
-                .filter_map(|(path, mtime)| {
-                    let path_ref = std::path::Path::new(path);
-                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| models.recognize(path_ref))) {
-                        Ok(Ok(text)) => Some((path.clone(), *mtime, text)),
-                        Ok(Err(err)) => {
-                            eprintln!("ocr {path}: {err}");
-                            None
-                        }
-                        Err(_) => {
-                            eprintln!("ocr {path}: panicked, skipped until it changes");
-                            Some((path.clone(), *mtime, String::new()))
-                        }
-                    }
-                })
-                .collect();
-            if let Err(err) = upsert_batch(&mut conn, &rows) {
-                eprintln!("ocr upsert error: {err}");
-            }
-            OCR_DONE.fetch_add(chunk.len(), Ordering::Relaxed);
-        }
-        OCR_DONE.store(OCR_TOTAL.load(Ordering::Relaxed), Ordering::Relaxed);
-        search::reload(&conn);
-        // Free the ORT arenas, then give glibc's freed pages back to the OS.
-        drop(models);
-        unsafe { libc::malloc_trim(0) };
     });
+}
+
+// One indexing pass; `rerun` = a later pass of the session: skips loading the
+// models when there is nothing to recognize.
+fn index_pass(rerun: bool) {
+    // After clip is done (or off): one ONNX session and one CPU-heavy
+    // worker at a time. Needs clip::start_indexing to be called, it sets
+    // the flag even when `semantic` is off.
+    while !CLIP_DONE.load(Ordering::Acquire) {
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    // Taken after the wait: clip's startup pass holds it until CLIP_DONE.
+    // Also serializes ocr passes, so a rerun can't overlap the startup one.
+    let _onnx = ONNX_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !ensure_models("ocr", &models_dir(), &MODEL_FILES, &OCR_DL_TOTAL, &OCR_DL_DONE) {
+        return;
+    }
+    let Ok(mut conn) = open_conn() else { return };
+
+    let total_sql = format!(
+        "SELECT COUNT(*) FROM files f LEFT JOIN ocr_text o
+         ON o.file_path = f.path AND o.mtime = f.mtime
+         WHERE o.file_path IS NULL AND {}",
+        image_where()
+    );
+    let total = conn.query_row(&total_sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+    if rerun && total == 0 {
+        return;
+    }
+    let Some(mut models) = OcrModels::load() else { return };
+
+    if SCAN_COMPLETE.load(Ordering::Relaxed) {
+        if let Err(err) = delete_orphans(&conn) {
+            eprintln!("ocr orphan cleanup error: {err}");
+        }
+    }
+
+    // Texts from earlier runs are searchable while the rest is indexed.
+    search::reload(&conn);
+
+    OCR_TOTAL.store(total.max(0) as usize, Ordering::Relaxed);
+    OCR_DONE.store(0, Ordering::Relaxed);
+
+    let mut after = String::new();
+    loop {
+        let Ok(chunk) = fetch_candidates(&conn, &after, DB_CHUNK) else { break };
+        let Some((last, _)) = chunk.last() else { break };
+        after = last.clone();
+        // A failed file is skipped without a row, so the next start retries it.
+        // A panicking one (decoder, ndarray index) gets an empty row instead:
+        // otherwise every start would die on it and never reach the files after.
+        let rows: Vec<(String, i64, String)> = chunk
+            .iter()
+            .filter_map(|(path, mtime)| {
+                let path_ref = std::path::Path::new(path);
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| models.recognize(path_ref))) {
+                    Ok(Ok(text)) => Some((path.clone(), *mtime, text)),
+                    Ok(Err(err)) => {
+                        eprintln!("ocr {path}: {err}");
+                        None
+                    }
+                    Err(_) => {
+                        eprintln!("ocr {path}: panicked, skipped until it changes");
+                        Some((path.clone(), *mtime, String::new()))
+                    }
+                }
+            })
+            .collect();
+        if let Err(err) = upsert_batch(&mut conn, &rows) {
+            eprintln!("ocr upsert error: {err}");
+        }
+        OCR_DONE.fetch_add(chunk.len(), Ordering::Relaxed);
+    }
+    OCR_DONE.store(OCR_TOTAL.load(Ordering::Relaxed), Ordering::Relaxed);
+    search::reload(&conn);
+    // Free the ORT arenas, then give glibc's freed pages back to the OS.
+    drop(models);
+    unsafe { libc::malloc_trim(0) };
 }
 
 #[cfg(test)]
