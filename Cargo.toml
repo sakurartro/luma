@@ -1,6 +1,6 @@
 [package]
 name = "luma_rust"
-version = "0.2.0-beta.6"
+version = "1.0.0"
 edition = "2024"
 
 # Package keeps its name; the command users type is `luma`.
