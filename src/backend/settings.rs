@@ -27,6 +27,9 @@ pub struct Settings {
     // are downloaded from HuggingFace on the next start (~12 MB).
     #[serde(default)]
     pub ocr: bool,
+    // Local API for AI agents (`luma query`, MCP); off by default.
+    #[serde(default)]
+    pub agent_api: bool,
     // Currency conversion ("100 usd to eur") via open.er-api.com; with false
     // no network request is made, the calculator keeps working.
     #[serde(default = "default_currency")]
@@ -64,6 +67,7 @@ impl Default for Settings {
             hide_patterns: default_hide_patterns(),
             semantic: false,
             ocr: false,
+            agent_api: false,
             currency: default_currency(),
         }
     }

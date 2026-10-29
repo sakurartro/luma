@@ -43,6 +43,7 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ("Files", &["search_dirs", "hide_patterns"]),
     ("Photos", &["semantic", "ocr"]),
     ("Calculator", &["currency"]),
+    ("Agents", &["agent_api"]),
 ];
 
 fn field(key: &str, value: &Value) -> Option<SettingField> {
