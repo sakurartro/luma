@@ -34,9 +34,18 @@ pub fn next_query() -> u64 {
     LATEST_QUERY.fetch_add(1, Ordering::Relaxed) + 1
 }
 
+/// Generation for callers outside the typing flow (the agent API): next_query()
+/// never returns 0, so these queries neither supersede UI ones nor get superseded.
+pub const NEVER_STALE: u64 = 0;
+
 /// A newer next_query() exists, so a newer worker will post its own results.
 pub fn is_stale(generation: u64) -> bool {
-    LATEST_QUERY.load(Ordering::Relaxed) != generation
+    generation != NEVER_STALE && LATEST_QUERY.load(Ordering::Relaxed) != generation
+}
+
+/// Query models are loaded; false while indexing, with `semantic` off or without models.
+pub fn clip_ready() -> bool {
+    MODELS.lock().unwrap().is_some()
 }
 
 // Embeddings + their files, snapshot taken once per startup after indexing.
@@ -315,6 +324,7 @@ mod tests {
         let newer = next_query();
         assert!(is_stale(older));
         assert!(!is_stale(newer));
+        assert!(!is_stale(NEVER_STALE));
     }
 
     #[test]

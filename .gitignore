@@ -6,3 +6,4 @@ main.sqlite3-journal
 models/
 CLAUDE.md 
 .claude/
+/bench/results/

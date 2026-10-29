@@ -27,8 +27,8 @@ jobs:
 
       - name: Rename artifact
         run: |
-          ARTIFACT="luma_rust-$(uname -m)"
-          cp target/release/luma_rust "$ARTIFACT"
+          ARTIFACT="luma-$(uname -m)"
+          cp target/release/luma "$ARTIFACT"
           echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
 
       - name: Publish to GitHub Releases
