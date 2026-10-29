@@ -36,7 +36,12 @@ pub fn start_files_watcher(dirs: &[String]) {
                 is_dir: path.is_dir(),
                 mtime: mtime_of(path),
             };
+            let is_photo = super::files_search::is_image(&entry.path);
             let _ = insert_batch(&[entry], conn);
+            if is_photo {
+                super::clip::schedule_reindex();
+                super::ocr::schedule_reindex();
+            }
         }
 
         for event in rx {

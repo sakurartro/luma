@@ -27,6 +27,9 @@ pub struct Settings {
     // are downloaded from HuggingFace on the next start (~12 MB).
     #[serde(default)]
     pub ocr: bool,
+    // Local API for AI agents (`luma query`, MCP); off by default.
+    #[serde(default)]
+    pub agent_api: bool,
     // Currency conversion ("100 usd to eur") via open.er-api.com; with false
     // no network request is made, the calculator keeps working.
     #[serde(default = "default_currency")]
@@ -64,6 +67,7 @@ impl Default for Settings {
             hide_patterns: default_hide_patterns(),
             semantic: false,
             ocr: false,
+            agent_api: false,
             currency: default_currency(),
         }
     }
@@ -120,6 +124,7 @@ pub fn read_object() -> anyhow::Result<serde_json::Map<String, serde_json::Value
 /// One edit from the settings menu.
 pub enum Change {
     Toggle,
+    Set(bool),
     Text(String),
     ListSet(usize, String),
     ListAdd(String),
@@ -147,6 +152,7 @@ fn with_change(text: &str, key: &str, change: Change) -> anyhow::Result<(String,
     // "" never enters a list: a "" hide pattern would hide every file (starts_with)
     match (value, change) {
         (Value::Bool(b), Change::Toggle) => *b = !*b,
+        (Value::Bool(b), Change::Set(on)) => *b = on,
         (Value::String(s), Change::Text(new)) => {
             if is_color(s) && !is_color(&new) {
                 anyhow::bail!("{key}: expected #RRGGBB, got {new:?}");
@@ -230,6 +236,14 @@ mod tests {
     fn change_toggles_bool() {
         let json = change(&template(), "semantic", Change::Toggle);
         assert_eq!(json["semantic"], true);
+    }
+
+    #[test]
+    fn change_set_is_idempotent() {
+        let on = change(&template(), "agent_api", Change::Set(true));
+        assert_eq!(on["agent_api"], true);
+        let twice = change(&serde_json::to_string(&on).unwrap(), "agent_api", Change::Set(true));
+        assert_eq!(twice["agent_api"], true);
     }
 
     #[test]

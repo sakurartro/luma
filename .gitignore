@@ -6,3 +6,6 @@ main.sqlite3-journal
 models/
 CLAUDE.md 
 .claude/
+/bench/
+__pycache__/
+/AI_AGENTS_PLAN.md

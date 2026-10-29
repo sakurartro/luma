@@ -1,5 +1,7 @@
 slint::include_modules!();
+mod api;
 mod backend;
+mod mcp;
 mod toggle;
 mod ui;
 use anyhow::Result;
@@ -24,6 +26,15 @@ static INIT_DB: Mutex<Option<DbState>> = Mutex::new(None);
 static TOGGLES: AtomicUsize = AtomicUsize::new(0);
 
 fn main() -> Result<()> {
+    // A client, not a second daemon: must run before notify_running(), which
+    // would turn this launch into a toggle.
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("query") => return api::run_query(&args[2..]),
+        Some("mcp") => return mcp::run(),
+        _ => {}
+    }
+
     // Any launch while an instance is live becomes a toggle request instead of
     // a second daemon.
     let toggle_arg = std::env::args().any(|arg| arg == "--toggle");

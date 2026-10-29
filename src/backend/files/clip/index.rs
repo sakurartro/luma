@@ -9,6 +9,7 @@ use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 // Progress, same polling style as INDEX_* in files_search; no UI hook yet.
 pub static EMB_TOTAL: AtomicUsize = AtomicUsize::new(0);
@@ -34,14 +35,22 @@ pub fn next_query() -> u64 {
     LATEST_QUERY.fetch_add(1, Ordering::Relaxed) + 1
 }
 
+/// Generation for callers outside the typing flow (the agent API): next_query()
+/// never returns 0, so these queries neither supersede UI ones nor get superseded.
+pub const NEVER_STALE: u64 = 0;
+
 /// A newer next_query() exists, so a newer worker will post its own results.
 pub fn is_stale(generation: u64) -> bool {
-    LATEST_QUERY.load(Ordering::Relaxed) != generation
+    generation != NEVER_STALE && LATEST_QUERY.load(Ordering::Relaxed) != generation
+}
+
+/// Query models are loaded; false while indexing, with `semantic` off or without models.
+pub fn clip_ready() -> bool {
+    MODELS.lock().unwrap().is_some()
 }
 
 // Embeddings + their files, snapshot taken once per startup after indexing.
-// Embeddings never change during a session (the watcher does not embed new
-// files), so the snapshot needs no invalidation. vec is l2-normalized.
+// Rebuilt after every indexing pass (see schedule_reindex). vec is l2-normalized.
 pub struct CachedVec {
     path: String,
     name: String,
@@ -69,7 +78,7 @@ const MODEL_FILES: [(&str, &str); 3] = [
 ];
 
 // DB rows read per pass; a multiple of INFERENCE_BATCH.
-const DB_CHUNK: usize = 256;
+const DB_CHUNK: usize = 16;
 
 // Cosine similarity -> UI percent: SEMANTIC_MIN_SCORE maps to 0,
 // SEMANTIC_MAX_SCORE to 100, values outside are clamped.
@@ -164,6 +173,8 @@ pub fn clip_search(query: &str, generation: u64) -> Vec<(FileEntry, i32)> {
     scored
         .into_iter()
         .filter(|(score, _)| *score >= SEMANTIC_MIN_SCORE)
+        // The snapshot outlives files deleted/renamed since it was built.
+        .filter(|(_, c)| std::path::Path::new(&c.path).exists())
         .take(SEMANTIC_MAX_HITS)
         .map(|(score, c)| {
             (
@@ -226,6 +237,10 @@ fn upsert_batch(conn: &mut Connection, rows: &[((String, i64), Vec<f32>)]) -> Re
 // never live and compete for the CPU at the same time.
 pub static CLIP_DONE: AtomicBool = AtomicBool::new(false);
 
+// Held by every clip and ocr pass: CLIP_DONE orders only the startup passes,
+// reruns from the watcher would otherwise load both models at once.
+pub static ONNX_LOCK: Mutex<()> = Mutex::new(());
+
 struct SetDoneOnDrop;
 impl Drop for SetDoneOnDrop {
     fn drop(&mut self) {
@@ -242,54 +257,104 @@ pub fn start_indexing(semantic: bool) {
         CLIP_DONE.store(true, Ordering::Release);
         return;
     }
-    std::thread::spawn(|| {
-        let _done = SetDoneOnDrop;
-        if !ensure_models("clip", &models_dir(), &MODEL_FILES, &DL_TOTAL, &DL_DONE) {
+    SEMANTIC_ON.store(true, Ordering::Relaxed);
+    std::thread::spawn(|| index_pass(false));
+}
+
+// Quiet time after the last new/changed photo before it gets embedded:
+// downloads come in bursts, so one model load covers the whole burst.
+const REINDEX_DELAY: Duration = Duration::from_secs(10);
+static SEMANTIC_ON: AtomicBool = AtomicBool::new(false);
+static LAST_PHOTO_EVENT: Mutex<Option<Instant>> = Mutex::new(None);
+static REINDEX_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Called by the files watcher for a created/changed photo. After
+/// REINDEX_DELAY of quiet it runs one more indexing pass, which loads the
+/// models only if some photo lacks a fresh vector. No-op until the first
+/// pass has made the query models ready.
+pub fn schedule_reindex() {
+    if !SEMANTIC_ON.load(Ordering::Relaxed) || !clip_ready() {
+        return;
+    }
+    let mut last = LAST_PHOTO_EVENT.lock().unwrap();
+    *last = Some(Instant::now());
+    if REINDEX_PENDING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    std::thread::spawn(|| loop {
+        let Some(last) = *LAST_PHOTO_EVENT.lock().unwrap() else { return };
+        let wait = REINDEX_DELAY.saturating_sub(last.elapsed());
+        if !wait.is_zero() {
+            std::thread::sleep(wait);
+            continue;
+        }
+        let started = Instant::now();
+        index_pass(true);
+        // Under the lock so an event can't land between the check and the flag.
+        let last = LAST_PHOTO_EVENT.lock().unwrap();
+        if last.is_none_or(|t| t <= started) {
+            REINDEX_PENDING.store(false, Ordering::Relaxed);
             return;
         }
-        let Some(mut models) = ClipModels::load() else { return };
-        let Ok(mut conn) = open_conn() else { return };
-
-        if SCAN_COMPLETE.load(Ordering::Relaxed) {
-            if let Err(err) = delete_orphans(&conn) {
-                eprintln!("clip orphan cleanup error: {err}");
-            }
-        }
-
-        let total_sql = format!(
-            "SELECT COUNT(*) FROM files f LEFT JOIN embeddings e
-             ON e.file_path = f.path AND e.kind = '{KIND}' AND e.mtime = f.mtime
-             WHERE e.file_path IS NULL AND {}",
-            image_where()
-        );
-        let total = conn.query_row(&total_sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
-        EMB_TOTAL.store(total.max(0) as usize, Ordering::Relaxed);
-        EMB_DONE.store(0, Ordering::Relaxed);
-
-        let mut after = String::new();
-        loop {
-            let Ok(chunk) = fetch_candidates(&conn, &after, DB_CHUNK as i64) else { break };
-            if chunk.is_empty() {
-                break;
-            }
-            let paths: Vec<String> = chunk.iter().map(|(p, _)| p.clone()).collect();
-            let vecs = models.embed_images(&paths);
-            let pairs: Vec<_> = chunk.iter().cloned().zip(vecs).filter_map(|(k, v)| v.map(|v| (k, v))).collect();
-            if let Err(err) = upsert_batch(&mut conn, &pairs) {
-                eprintln!("clip upsert error: {err}");
-            }
-            EMB_DONE.fetch_add(chunk.len(), Ordering::Relaxed);
-            after = chunk.last().unwrap().0.clone();
-        }
-        EMB_DONE.store(EMB_TOTAL.load(Ordering::Relaxed), Ordering::Relaxed);
-        // Models + vector snapshot go live only now: a query during indexing
-        // would score an incomplete cache. into_query() drops the vision
-        // session here, releasing its ORT arena back to the OS.
-        *MODELS.lock().unwrap() = Some(models.into_query());
-        *VECTORS.lock().unwrap() = load_vectors(&conn);
-        // glibc holds the freed pages in its arenas; give them back to the OS.
-        unsafe { libc::malloc_trim(0) };
     });
+}
+
+// One indexing pass: embed photos without a fresh vector, then publish the
+// query models + vector snapshot. `rerun` = a later pass of the session: skips
+// loading the models when there is nothing to embed.
+fn index_pass(rerun: bool) {
+    let _done = SetDoneOnDrop;
+    // A panicked pass must not block the other worker forever.
+    let _onnx = ONNX_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !ensure_models("clip", &models_dir(), &MODEL_FILES, &DL_TOTAL, &DL_DONE) {
+        return;
+    }
+    let Ok(mut conn) = open_conn() else { return };
+
+    let total_sql = format!(
+        "SELECT COUNT(*) FROM files f LEFT JOIN embeddings e
+         ON e.file_path = f.path AND e.kind = '{KIND}' AND e.mtime = f.mtime
+         WHERE e.file_path IS NULL AND {}",
+        image_where()
+    );
+    let total = conn.query_row(&total_sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+    if rerun && total == 0 {
+        return;
+    }
+    let Some(mut models) = ClipModels::load() else { return };
+
+    if SCAN_COMPLETE.load(Ordering::Relaxed) {
+        if let Err(err) = delete_orphans(&conn) {
+            eprintln!("clip orphan cleanup error: {err}");
+        }
+    }
+
+    EMB_TOTAL.store(total.max(0) as usize, Ordering::Relaxed);
+    EMB_DONE.store(0, Ordering::Relaxed);
+
+    let mut after = String::new();
+    loop {
+        let Ok(chunk) = fetch_candidates(&conn, &after, DB_CHUNK as i64) else { break };
+        if chunk.is_empty() {
+            break;
+        }
+        let paths: Vec<String> = chunk.iter().map(|(p, _)| p.clone()).collect();
+        let vecs = models.embed_images(&paths);
+        let pairs: Vec<_> = chunk.iter().cloned().zip(vecs).filter_map(|(k, v)| v.map(|v| (k, v))).collect();
+        if let Err(err) = upsert_batch(&mut conn, &pairs) {
+            eprintln!("clip upsert error: {err}");
+        }
+        EMB_DONE.fetch_add(chunk.len(), Ordering::Relaxed);
+        after = chunk.last().unwrap().0.clone();
+    }
+    EMB_DONE.store(EMB_TOTAL.load(Ordering::Relaxed), Ordering::Relaxed);
+    // Models + vector snapshot go live only now: a query during indexing
+    // would score an incomplete cache. into_query() drops the vision
+    // session here, releasing its ORT arena back to the OS.
+    *MODELS.lock().unwrap() = Some(models.into_query());
+    *VECTORS.lock().unwrap() = load_vectors(&conn);
+    // glibc holds the freed pages in its arenas; give them back to the OS.
+    unsafe { libc::malloc_trim(0) };
 }
 
 #[cfg(test)]
@@ -315,6 +380,7 @@ mod tests {
         let newer = next_query();
         assert!(is_stale(older));
         assert!(!is_stale(newer));
+        assert!(!is_stale(NEVER_STALE));
     }
 
     #[test]
