@@ -1,7 +1,7 @@
 use super::db_service::insert_batch;
 use anyhow::{Ok, Result};
 use rusqlite::Connection;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
@@ -90,9 +90,16 @@ pub fn mtime_of(path: &std::path::Path) -> i64 {
         .unwrap_or(0)
 }
 
+// `exclude_dirs` setting: a path under one of them is neither walked nor
+// indexed. Component-wise, so ~/a does not exclude ~/ab.
+pub fn is_excluded(path: &Path, excluded: &[PathBuf]) -> bool {
+    excluded.iter().any(|dir| path.starts_with(dir))
+}
+
 // Wipe + full rescan: files carry no stats, so there is nothing to lose.
 // Watcher handles changes while the process is alive.
-pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
+pub fn scan_dirs(conn: &mut Connection, dirs: &[String], exclude: &[String]) -> Result<()> {
+    let excluded: Vec<PathBuf> = exclude.iter().map(|dir| expand_home(dir)).collect();
     // Counting pass (metadata only) so the UI can show an honest percentage.
     let mut total = 0;
     for dir in dirs {
@@ -100,6 +107,7 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
         if root.is_dir() {
             total += WalkDir::new(&root)
                 .into_iter()
+                .filter_entry(|entry| !is_excluded(entry.path(), &excluded))
                 .filter_map(Result::ok)
                 .filter(|entry| entry.depth() > 0)
                 .count();
@@ -122,7 +130,8 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String]) -> Result<()> {
             all_dirs_present = false;
             continue;
         }
-        for entry_result in WalkDir::new(&root) {
+        // filter_entry prunes: an excluded dir's subtree is never read.
+        for entry_result in WalkDir::new(&root).into_iter().filter_entry(|entry| !is_excluded(entry.path(), &excluded)) {
             // skip unreadable/vanished paths instead of aborting the whole scan
             let Some(entry) = entry_result.ok() else { continue };
             if entry.depth() == 0 {
@@ -173,6 +182,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "").unwrap();
         std::fs::write(dir.join("b.txt"), "").unwrap();
+        // Excluded subtree: not counted, not indexed.
+        std::fs::create_dir_all(dir.join("skip/deep")).unwrap();
+        std::fs::write(dir.join("skip/deep/c.txt"), "").unwrap();
 
         let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -181,8 +193,17 @@ mod tests {
         )
         .unwrap();
 
-        scan_dirs(&mut conn, &[dir.to_string_lossy().into_owned()]).unwrap();
+        let skip = dir.join("skip").to_string_lossy().into_owned();
+        scan_dirs(&mut conn, &[dir.to_string_lossy().into_owned()], &[skip]).unwrap();
 
+        let skipped: i64 = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM files WHERE path LIKE '%skip%') + (SELECT COUNT(*) FROM folders WHERE path LIKE '%skip%')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(skipped, 0);
         assert_eq!(INDEX_TOTAL.load(Ordering::Relaxed), 2);
         assert_eq!(INDEXED.load(Ordering::Relaxed), 2);
         assert!(INDEX_DONE.load(Ordering::Relaxed));
@@ -190,6 +211,16 @@ mod tests {
         assert!(SCAN_COMPLETE.load(Ordering::Relaxed));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn is_excluded_by_path_components() {
+        let excluded = [PathBuf::from("/home/u/a")];
+        assert!(is_excluded(Path::new("/home/u/a"), &excluded));
+        assert!(is_excluded(Path::new("/home/u/a/b/c.png"), &excluded));
+        assert!(!is_excluded(Path::new("/home/u/ab"), &excluded));
+        assert!(!is_excluded(Path::new("/home/u/b"), &excluded));
+        assert!(!is_excluded(Path::new("/home/u/a"), &[]));
     }
 
     #[test]

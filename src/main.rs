@@ -162,14 +162,14 @@ fn main() -> Result<()> {
                 let dirs = st.search_dirs;
                 match open_conn() {
                     Ok(mut conn) => {
-                        if let Err(err) = files_search::scan_dirs(&mut conn, &dirs) {
+                        if let Err(err) = files_search::scan_dirs(&mut conn, &dirs, &st.exclude_dirs) {
                             eprintln!("file scan error: {err}");
                         }
                     }
                     Err(err) => eprintln!("failed to open db for file scan: {err}"),
                 }
                 files_search::INDEX_DONE.store(true, Ordering::Relaxed);
-                start_files_watcher(&dirs);
+                start_files_watcher(&dirs, &st.exclude_dirs);
                 // Own thread; no-op when the `semantic` setting is off.
                 clip::start_indexing(st.semantic);
                 // Waits for the clip worker, so keep it after the call above;

@@ -24,10 +24,23 @@ pub static OCR_DL_DONE: AtomicUsize = AtomicUsize::new(0);
 // English PP-OCRv4 (~12 MB total): detector from the RapidOCR repo (it finds
 // text regardless of language, the recognizer + dict carry the language),
 // recognizer and its dict from other HF repos. Local names are fixed.
-const MODEL_FILES: [(&str, &str); 3] = [
-    ("det.onnx", "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx"),
-    ("rec.onnx", "https://huggingface.co/breezedeus/cnocr-ppocr-en_PP-OCRv4/resolve/main/en_PP-OCRv4_rec_infer.onnx"),
-    ("dict.txt", "https://huggingface.co/deepghs/paddleocr/resolve/main/rec/en_PP-OCRv4_rec/dict.txt"),
+// Pinned to a repo commit + sha256: a changed upstream file must not load.
+const MODEL_FILES: [(&str, &str, &str); 3] = [
+    (
+        "det.onnx",
+        "https://huggingface.co/SWHL/RapidOCR/resolve/1cfba2e90fc938db55889873735088de210cc173/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
+        "d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+    ),
+    (
+        "rec.onnx",
+        "https://huggingface.co/breezedeus/cnocr-ppocr-en_PP-OCRv4/resolve/4af71ff013f195d04426f6dca62ec26656dfbbc4/en_PP-OCRv4_rec_infer.onnx",
+        "5ca59a096cf493d5fd5044b9ccc1bdea9229fbcf656bd76040ff80a00201ee16",
+    ),
+    (
+        "dict.txt",
+        "https://huggingface.co/deepghs/paddleocr/resolve/e7bd63d9c674c96bd4fdab435af0efb383919c18/rec/en_PP-OCRv4_rec/dict.txt",
+        "5662df9d2d03f0e8ca0d3b0649d6acbab904b6a14b3d3521463c71c37c668ce3",
+    ),
 ];
 
 // Images per pass: OCR is slow (hundreds of ms per image), so keep chunks

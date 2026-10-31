@@ -12,6 +12,10 @@ if ! command -v curl >/dev/null 2>&1; then
     echo "Error: curl is required to download the release." >&2
     exit 1
 fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "Error: sha256sum is required to verify the release." >&2
+    exit 1
+fi
 
 arch=$(uname -m)
 if [ "$arch" != "x86_64" ]; then
@@ -24,7 +28,18 @@ if ! mkdir -p "$dest" || [ ! -w "$dest" ]; then
     exit 1
 fi
 
-url="$repo/releases/latest/download/$bin-$arch"
+# Resolve "latest" to a tag once, so the binary and its checksum come from the
+# same release even if a new one is published mid-install.
+tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$repo/releases/latest") || tag=""
+tag="${tag##*/}"
+case "$tag" in
+    v*) ;;
+    *)
+        echo "Error: cannot resolve the latest release (check your network; releases are at $repo/releases)." >&2
+        exit 1
+        ;;
+esac
+url="$repo/releases/download/$tag/$bin-$arch"
 
 # Temp file + rename: writing over a running binary fails with ETXTBSY, and a
 # broken download must not destroy the installed one.
@@ -34,6 +49,19 @@ trap 'rm -f "$tmp"' EXIT
 echo "Downloading $url"
 if ! curl -fsSL "$url" -o "$tmp"; then
     echo "Error: download failed (check your network; the release exists at $repo/releases)." >&2
+    exit 1
+fi
+# Same-release checksum: catches corrupted/truncated downloads, not a
+# compromised publisher account.
+if ! sum=$(curl -fsSL "$url.sha256"); then
+    echo "Error: cannot download $url.sha256 to verify the binary." >&2
+    exit 1
+fi
+expected="${sum%% *}"
+actual=$(sha256sum "$tmp")
+actual="${actual%% *}"
+if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    echo "Error: checksum mismatch for $url (expected $expected, got $actual); nothing installed." >&2
     exit 1
 fi
 chmod +x "$tmp"
