@@ -275,6 +275,11 @@ Dev packages (Debian/Ubuntu naming): `libxkbcommon-dev libfontconfig1-dev libgl1
 - Agent does not see Luma — Luma must be running; `claude mcp list` should show `luma`; with `semantic` / `ocr` off the tools return a hint, not results
 - Logs go to stderr — run Luma from a terminal to see them
 
+## Update
+```sh
+luma update
+```
+
 ## Uninstall
 
 ```sh
