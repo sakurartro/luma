@@ -4,6 +4,7 @@ mod backend;
 mod mcp;
 mod toggle;
 mod ui;
+mod update;
 use anyhow::Result;
 use backend::apps::apps_search::Apps;
 use backend::apps::db_init::{DbState, open_conn};
@@ -32,6 +33,7 @@ fn main() -> Result<()> {
     match args.get(1).map(String::as_str) {
         Some("query") => return api::run_query(&args[2..]),
         Some("mcp") => return mcp::run(),
+        Some("update") => return update::run(),
         _ => {}
     }
 
