@@ -1,6 +1,7 @@
 use super::apps_search::{app_dirs, Apps};
 use super::db_init::open_conn;
 use notify::{EventKind, RecursiveMode, Watcher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
@@ -8,6 +9,10 @@ use std::time::Duration;
 // Package installs write several .desktop files in a burst: wait until the
 // dirs are quiet this long, then refresh once with every file complete.
 const REFRESH_DEBOUNCE: Duration = Duration::from_secs(2);
+
+// Set after a refresh wrote the db; the unified search reloads its in-memory
+// app list when it sees this (the apps view reloads on every open anyway).
+pub static APPS_CHANGED: AtomicBool = AtomicBool::new(false);
 
 pub fn start_watcher() {
     thread::spawn(move || {
@@ -44,10 +49,11 @@ pub fn start_watcher() {
                     // packages bring new icons) plus a re-parse of all .desktop
                     // files. find_apps also drops removed/hidden apps and brings
                     // back entries a deleted override was shadowing.
-                    if let Err(err) = Apps::refresh_icons(&mut conn)
+                    match Apps::refresh_icons(&mut conn)
                         .and_then(|icons| Apps::find_apps(&mut conn, &icons))
                     {
-                        eprintln!("watcher refresh error: {err}");
+                        Ok(_) => APPS_CHANGED.store(true, Ordering::Relaxed),
+                        Err(err) => eprintln!("watcher refresh error: {err}"),
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => break,

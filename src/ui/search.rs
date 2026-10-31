@@ -1,6 +1,7 @@
 use crate::backend::apps::apps_search::Apps;
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::apps::fuzzy;
+use crate::backend::apps::watcher::APPS_CHANGED;
 use crate::backend::files::clip;
 use crate::backend::files::files_search;
 use crate::backend::files::ocr;
@@ -82,8 +83,9 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
         move |query: slint::SharedString| {
             if let Some(window) = weak.upgrade() {
                 // First unified search lazy-loads the app list (own
-                // connection, same pattern as on_launch_app).
-                if all_apps.borrow().is_empty() {
+                // connection, same pattern as on_launch_app); reload after
+                // the watcher picked up installed/removed apps.
+                if APPS_CHANGED.swap(false, Ordering::Relaxed) || all_apps.borrow().is_empty() {
                     match open_conn() {
                         Ok(mut conn) => match Apps::refresh(&mut conn) {
                             Ok(apps_refresh_obj) => {
