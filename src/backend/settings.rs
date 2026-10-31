@@ -16,9 +16,14 @@ pub struct Settings {
     pub text_dim: String,
     #[serde(default = "default_search_dirs")]
     pub search_dirs: Vec<String>,
-    // Prefix match on file/folder name; "." hides all dotfiles
+    // Prefix match on file/folder name; "." hides all dotfiles. Display only:
+    // hidden files are still indexed, exclude_dirs keeps them out of the index.
     #[serde(default = "default_hide_patterns")]
     pub hide_patterns: Vec<String>,
+    // Folders (paths, "~/" allowed) under search_dirs that are never walked,
+    // watched into the db, or fed to CLIP/OCR. Applies after a restart.
+    #[serde(default)]
+    pub exclude_dirs: Vec<String>,
     // Semantic (CLIP) photo search; off by default. When enabled, the models
     // are downloaded from HuggingFace on the next start (~154 MB).
     #[serde(default)]
@@ -65,6 +70,7 @@ impl Default for Settings {
             text_dim: "#7E8A6C".into(),
             search_dirs: default_search_dirs(),
             hide_patterns: default_hide_patterns(),
+            exclude_dirs: Vec::new(),
             semantic: false,
             ocr: false,
             agent_api: false,
