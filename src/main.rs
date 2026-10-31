@@ -4,7 +4,8 @@ mod backend;
 mod mcp;
 mod toggle;
 mod ui;
-use anyhow::{Context, Result};
+mod update;
+use anyhow::Result;
 use backend::apps::apps_search::Apps;
 use backend::apps::db_init::{DbState, open_conn};
 use backend::apps::watcher::start_watcher;
@@ -32,17 +33,7 @@ fn main() -> Result<()> {
     match args.get(1).map(String::as_str) {
         Some("query") => return api::run_query(&args[2..]),
         Some("mcp") => return mcp::run(),
-        Some("update") => {
-            // Install next to the running binary, not the script's default ~/.local/bin.
-            let exe = std::env::current_exe()?;
-            let dir = exe.parent().context("binary has no parent dir")?;
-            let status = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(r#"curl -fsSL https://raw.githubusercontent.com/sakurartro/luma/main/install.sh | sh -s "$0""#)
-                .arg(dir)
-                .status()?;
-            std::process::exit(status.code().unwrap_or(1));
-        }
+        Some("update") => return update::run(),
         _ => {}
     }
 

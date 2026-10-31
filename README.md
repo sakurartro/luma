@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/sakurartro/luma/main/install.sh | s
 ```
 
 The script downloads the binary into `~/.local/bin` (or a path of your choice: `... | sh -s /usr/local/bin`).
-To update later: `luma update` (reinstalls the latest release next to the current binary).
+To update later: `luma update` (installs the latest release next to the current binary if it is newer).
 
 ## Setup
 
