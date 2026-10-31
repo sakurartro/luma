@@ -4,6 +4,7 @@ mod backend;
 mod mcp;
 mod toggle;
 mod ui;
+mod update;
 use anyhow::Result;
 use backend::apps::apps_search::Apps;
 use backend::apps::db_init::{DbState, open_conn};
@@ -32,6 +33,7 @@ fn main() -> Result<()> {
     match args.get(1).map(String::as_str) {
         Some("query") => return api::run_query(&args[2..]),
         Some("mcp") => return mcp::run(),
+        Some("update") => return update::run(),
         _ => {}
     }
 
@@ -162,14 +164,14 @@ fn main() -> Result<()> {
                 let dirs = st.search_dirs;
                 match open_conn() {
                     Ok(mut conn) => {
-                        if let Err(err) = files_search::scan_dirs(&mut conn, &dirs) {
+                        if let Err(err) = files_search::scan_dirs(&mut conn, &dirs, &st.exclude_dirs) {
                             eprintln!("file scan error: {err}");
                         }
                     }
                     Err(err) => eprintln!("failed to open db for file scan: {err}"),
                 }
                 files_search::INDEX_DONE.store(true, Ordering::Relaxed);
-                start_files_watcher(&dirs);
+                start_files_watcher(&dirs, &st.exclude_dirs);
                 // Own thread; no-op when the `semantic` setting is off.
                 clip::start_indexing(st.semantic);
                 // Waits for the clip worker, so keep it after the call above;

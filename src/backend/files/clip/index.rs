@@ -71,10 +71,23 @@ const SEMANTIC_MAX_HITS: usize = 32;
 const KIND: &str = "clip";
 
 // HuggingFace export the app expects: quantized ViT-B/32 (~154 MB total).
-const MODEL_FILES: [(&str, &str); 3] = [
-    ("tokenizer.json", "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/tokenizer.json"),
-    ("vision_model_quantized.onnx", "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_quantized.onnx"),
-    ("text_model_quantized.onnx", "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/text_model_quantized.onnx"),
+// Pinned to a repo commit + sha256: a changed upstream file must not load.
+const MODEL_FILES: [(&str, &str, &str); 3] = [
+    (
+        "tokenizer.json",
+        "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/6b7c523703ae26e39be4b03774966f8571c7f523/tokenizer.json",
+        "f7f3b7af117d467b58374797691a6438d3e6b9e9cef800dfd5dced7f697a90cd",
+    ),
+    (
+        "vision_model_quantized.onnx",
+        "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/6b7c523703ae26e39be4b03774966f8571c7f523/onnx/vision_model_quantized.onnx",
+        "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
+    ),
+    (
+        "text_model_quantized.onnx",
+        "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/6b7c523703ae26e39be4b03774966f8571c7f523/onnx/text_model_quantized.onnx",
+        "73baab855d406190da9faa498cfedf65f15cf309f4cc7385b7b032e6d08e5c3a",
+    ),
 ];
 
 // DB rows read per pass; a multiple of INFERENCE_BATCH.

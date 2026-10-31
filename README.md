@@ -29,6 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/sakurartro/luma/main/install.sh | s
 ```
 
 The script downloads the binary into `~/.local/bin` (or a path of your choice: `... | sh -s /usr/local/bin`).
+To update later: `luma update` (installs the latest release next to the current binary if it is newer).
 
 ## Setup
 
@@ -186,8 +187,8 @@ an hour). Photos, thumbnails, the index and agent queries stay local.
 ## Configuration
 
 Edit settings in the launcher (`Alt+4` / `Ctrl+,`) or by hand in
-`~/.config/luma/settings.json`. Hand edits, `search_dirs`, `semantic` and `ocr`
-apply after a restart (the menu offers a Restart button); everything else
+`~/.config/luma/settings.json`. Hand edits, `search_dirs`, `exclude_dirs`, `semantic`
+and `ocr` apply after a restart (the menu offers a Restart button); everything else
 applies at once. New options are appended with their defaults; a broken file
 falls back to defaults and is kept.
 
@@ -195,7 +196,8 @@ falls back to defaults and is kept.
 |--------|---------|--|
 | `bg` `surface` `hover` `selected` `border` `accent` `text` `text_dim` | see below | Colors, `#RRGGBB`; an unparsable value renders black |
 | `search_dirs` | `~/Documents` `~/Pictures` `~/Desktop` | Folders indexed for file search |
-| `hide_patterns` | `["."]` | File name prefixes to hide (dotfiles) |
+| `hide_patterns` | `["."]` | File name prefixes to hide from results (dotfiles). Hidden files are still indexed; use `exclude_dirs` to keep a folder out of the index |
+| `exclude_dirs` | `[]` | Folders inside `search_dirs` that are never scanned, watched or fed to semantic/OCR indexing, e.g. `["~/Pictures/private"]` |
 | `semantic` | `false` | Photo search by meaning (CLIP, English queries). Downloads ~154 MB of models, indexes photos in the background |
 | `ocr` | `false` | Image search by the text on them (PaddleOCR, English). Downloads ~12 MB of models, runs after semantic indexing |
 | `agent_api` | `false` | Lets agents query Luma (`luma mcp`, `luma query`). Set by Settings → Agents |
@@ -218,6 +220,7 @@ Full example (the defaults):
   "border": "#2C3620", "accent": "#A9B665", "text": "#E4E7D0", "text_dim": "#7E8A6C",
   "search_dirs": ["~/Documents", "~/Pictures", "~/Desktop"],
   "hide_patterns": ["."],
+  "exclude_dirs": [],
   "semantic": false,
   "ocr": false,
   "agent_api": false,
@@ -271,6 +274,11 @@ Dev packages (Debian/Ubuntu naming): `libxkbcommon-dev libfontconfig1-dev libgl1
 - Stuck hotkey — kill the process or remove `$XDG_RUNTIME_DIR/luma-rust.sock` (or `/tmp/luma-rust-<uid>.sock`)
 - Agent does not see Luma — Luma must be running; `claude mcp list` should show `luma`; with `semantic` / `ocr` off the tools return a hint, not results
 - Logs go to stderr — run Luma from a terminal to see them
+
+## Update
+```sh
+luma update
+```
 
 ## Uninstall
 

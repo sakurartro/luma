@@ -13,12 +13,12 @@ use std::thread;
 
 use super::Ctx;
 
-// search_dirs / semantic / ocr as the watcher and indexers got them at startup;
-// they can't be reconfigured live, so a difference asks for a restart.
-static STARTED_WITH: OnceLock<(Vec<String>, bool, bool)> = OnceLock::new();
+// search_dirs / semantic / ocr / exclude_dirs as the watcher and indexers got
+// them at startup; they can't be reconfigured live, so a difference asks for a restart.
+static STARTED_WITH: OnceLock<(Vec<String>, bool, bool, Vec<String>)> = OnceLock::new();
 
-fn restart_values(st: &Settings) -> (Vec<String>, bool, bool) {
-    (st.search_dirs.clone(), st.semantic, st.ocr)
+fn restart_values(st: &Settings) -> (Vec<String>, bool, bool, Vec<String>) {
+    (st.search_dirs.clone(), st.semantic, st.ocr, st.exclude_dirs.clone())
 }
 
 pub fn remember_startup(st: &Settings) {
@@ -44,7 +44,7 @@ pub(super) fn apply_settings(window: &MainWindow, st: &Settings, ctx: &Ctx) {
 // keys added by hand) land in "Other" in file order.
 const CATEGORIES: &[(&str, &[&str])] = &[
     ("Appearance", &["bg", "surface", "hover", "selected", "border", "accent", "text", "text_dim"]),
-    ("Files", &["search_dirs", "hide_patterns"]),
+    ("Files", &["search_dirs", "hide_patterns", "exclude_dirs"]),
     ("Photos", &["semantic", "ocr"]),
     ("Calculator", &["currency"]),
 ];

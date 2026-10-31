@@ -44,3 +44,18 @@ jobs:
       # TODO: add `-- -D warnings` once fix/build-warnings is merged.
       - name: Clippy
         run: cargo clippy --locked --all-targets
+
+  # RustSec advisories for Cargo.lock: fails on vulnerabilities, unmaintained
+  # crates are only warnings. Needs no build, so no native deps here.
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit
+        run: cargo audit

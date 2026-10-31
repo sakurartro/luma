@@ -1,12 +1,14 @@
 use crate::backend::apps::db_init::open_conn;
 use super::db_service::{del_entry, insert_batch};
-use super::files_search::{expand_home, mtime_of, DB_VERSION, FileEntry};
+use super::files_search::{expand_home, is_excluded, mtime_of, DB_VERSION, FileEntry};
 use notify::{EventKind, RecursiveMode, Watcher};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
-pub fn start_files_watcher(dirs: &[String]) {
+pub fn start_files_watcher(dirs: &[String], exclude: &[String]) {
     let dirs = dirs.to_vec();
+    let excluded: Vec<PathBuf> = exclude.iter().map(|dir| expand_home(dir)).collect();
     thread::spawn(move || {
         let mut conn = open_conn().expect("Failed to init db conn by files watcher");
         let (tx, rx) = mpsc::channel();
@@ -19,10 +21,15 @@ pub fn start_files_watcher(dirs: &[String]) {
             }
         }
 
-        fn upsert(path: &std::path::Path, conn: &mut rusqlite::Connection) {
+        fn upsert(path: &std::path::Path, conn: &mut rusqlite::Connection, excluded: &[PathBuf]) {
             // The db lives under the watched tree; writing it would trigger
             // inotify again and feed the watcher with its own writes forever.
             if path.starts_with(crate::backend::apps::db_init::config_dir()) {
+                return;
+            }
+            // shortcut: notify still watches excluded subtrees, their events
+            // are only dropped here; prune the watch itself if inotify limits bite.
+            if is_excluded(path, excluded) {
                 return;
             }
             if !(path.is_dir() || path.is_file()) {
@@ -55,7 +62,7 @@ pub fn start_files_watcher(dirs: &[String]) {
                         // shortcut: contents of a moved-in tree stay unindexed
                         // until the next startup rescan; inotify only sees
                         // the moved dir itself
-                        upsert(&path, &mut conn);
+                        upsert(&path, &mut conn, &excluded);
                     }
                     DB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -67,7 +74,7 @@ pub fn start_files_watcher(dirs: &[String]) {
                         let _ = del_entry(&mut conn, path.to_string_lossy().to_string());
                     }
                     for path in &event.paths {
-                        upsert(path, &mut conn);
+                        upsert(path, &mut conn, &excluded);
                     }
                     DB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }

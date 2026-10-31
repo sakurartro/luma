@@ -29,9 +29,13 @@ jobs:
         run: |
           ARTIFACT="luma-$(uname -m)"
           cp target/release/luma "$ARTIFACT"
+          # Checked by install.sh before the binary is installed.
+          sha256sum "$ARTIFACT" > "$ARTIFACT.sha256"
           echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.ARTIFACT }}
+          files: |
+            ${{ env.ARTIFACT }}
+            ${{ env.ARTIFACT }}.sha256
