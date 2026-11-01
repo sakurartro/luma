@@ -67,7 +67,6 @@ export component FilesView {
         }
 
         SelScrollView {
-            height: parent.height;
             property <int> grid-cols: max(1, floor((files-grid.width + 10px) / 100px));
             item-y: floor(root.sel / root.cols) * 102px;
             item-height: 96px;

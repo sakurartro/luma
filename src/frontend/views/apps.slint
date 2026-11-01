@@ -64,7 +64,6 @@ export component AppsView {
         }
 
         SelScrollView {
-            height: parent.height;
             // 90px tile + 10px spacing per column, 92px + 10px per row
             property <int> grid-cols: max(1, floor((apps-grid.width + 10px) / 100px));
             item-y: floor(root.sel / root.cols) * 102px;
