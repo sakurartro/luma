@@ -3,7 +3,7 @@ use crate::backend::apps::db_init::{DbState, open_conn};
 use crate::backend::apps::db_service::{get_category_scores, record_launch, set_pinned};
 use crate::backend::apps::fuzzy;
 use crate::{AppItem, MainWindow};
-use slint::{ComponentHandle, VecModel};
+use slint::{ComponentHandle, Model, VecModel};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::os::unix::process::CommandExt;
@@ -12,6 +12,9 @@ use std::process::{Command, Stdio};
 use std::rc::Rc;
 
 use super::Ctx;
+
+// rows in the empty-query list; fits the results area without scrolling
+const HOME_APPS: usize = 8;
 
 fn build_item(app: &App, cache: &RefCell<HashMap<String, slint::Image>>) -> AppItem {
     let icon = cache
@@ -81,6 +84,17 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx, mut db_state: DbState) {
                     Rc::new(VecModel::from(build_items(&all_apps.borrow(), &icon_cache)))
                         .into(),
                 );
+            }
+        }
+    });
+    main_window.on_show_home({
+        let weak = main_window.as_weak();
+        move || {
+            if let Some(window) = weak.upgrade() {
+                window.invoke_show_apps();
+                let apps = window.get_apps();
+                let items: Vec<AppItem> = apps.iter().take(HOME_APPS).collect();
+                window.set_apps(Rc::new(VecModel::from(items)).into());
             }
         }
     });

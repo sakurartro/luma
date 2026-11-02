@@ -94,7 +94,8 @@ export component SettingsView {
     callback setting-list-remove(string, int);
     callback restart();
 
-    height: 350px;
+    // fills the fixed results area, minus a calc result or progress bars
+    vertical-stretch: 1;
 
     VerticalLayout {
         spacing: 8px;

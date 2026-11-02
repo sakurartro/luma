@@ -128,6 +128,7 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     let hide_patterns = hide_patterns.borrow().clone();
                     let base_len = file_items.len();
                     let generation = clip::next_query();
+                    window.set_searching(true);
                     std::thread::spawn(move || {
                         let extra_items = extra_file_items(
                             query.as_str(),
@@ -156,10 +157,13 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                                         build_file_item(&f, kind, score)
                                     }));
                                     set_files(&window, all);
+                                    window.set_searching(false);
                                 }
                             }
                         });
                     });
+                } else {
+                    window.set_searching(false);
                 }
                 set_files(&window, file_items);
             }

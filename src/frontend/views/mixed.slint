@@ -6,6 +6,8 @@ import { SelScrollView, FileIcons } from "../widgets.slint";
 export component MixedView {
     in property <[AppItem]> apps;
     in property <[FileItem]> files;
+    // empty query: the pinned / most used apps list
+    in property <bool> home;
     in-out property <int> sel;
     callback launch-app(AppItem);
     callback open-file(FileItem);
@@ -24,8 +26,13 @@ export component MixedView {
         }
 
         SelScrollView {
-            // shrink with the result count, cap at the scroll threshold
-            height: min(140px, root.apps.length * 32px);
+            // fixed slot while searching, so the row count changing per keystroke or
+            // files arriving late never move the files list; the empty-query list
+            // takes what it needs. Can shrink when a calc result is shown.
+            property <length> want: root.apps.length == 0 ? 0 : root.home ? root.apps.length * 32px : 140px;
+            preferred-height: self.want;
+            max-height: self.want;
+            min-height: min(64px, self.want);
             item-y: root.sel < root.apps.length ? root.sel * 32px : -1px;
             item-height: 30px;
             scrolled => { root.tip-sel = -1; }
@@ -89,7 +96,9 @@ export component MixedView {
         }
 
         SelScrollView {
-            height: min(140px, root.files.length * 32px);
+            // takes the rest of the results area
+            vertical-stretch: 1;
+            min-height: root.files.length == 0 ? 0 : 64px;
             item-y: root.sel >= root.apps.length ? (root.sel - root.apps.length) * 32px : -1px;
             item-height: 30px;
             scrolled => { root.tip-sel = -1; }
