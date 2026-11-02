@@ -21,6 +21,8 @@ export component MainWindow inherits Window {
     // files tab sort: 0 = name, 1 = newest, 2 = oldest
     in-out property <int> files-sort: 0;
     callback show_apps();
+    // empty-query list: show_apps cut to the first few (pinned, then most used)
+    callback show_home();
     callback show_files();
     callback show_power_modes();
     callback launch_app(AppItem);
@@ -50,9 +52,12 @@ export component MainWindow inherits Window {
 
     // keyboard selection; in mode 0 it runs through apps first, then files
     in-out property <int> sel: 0;
+    // stand-in for files in the empty-query view
+    property <[FileItem]> no-files;
     // columns of the apps/files grid, pushed from the grid itself
     property <int> cols: 1;
-    property <int> sel-len: root.mode == 0 ? root.apps.length + root.files.length
+    // with an empty query mode 0 lists apps only (files there are stale)
+    property <int> sel-len: root.mode == 0 ? root.apps.length + (root.input-text == "" ? 0 : root.files.length)
         : root.mode == 1 ? root.apps.length
         : root.mode == 2 || root.mode == 4 ? root.files.length
         : root.power-opts.length;
@@ -98,6 +103,9 @@ export component MainWindow inherits Window {
         root.sel = m == 3 && root.mode != 3 ? -1 : 0;
         if root.mode == m {
             root.mode = 0;
+            if root.input-text == "" {
+                root.show_home();
+            }
         } else {
             root.mode = m;
             if m == 1 {
@@ -142,6 +150,8 @@ export component MainWindow inherits Window {
         root.sel = 0;
         root.selected-category = "";
         root.tip-sel = -1;
+        // empty-query list of pinned and most used apps
+        root.show_home();
     }
     in-out property <string> query-result;
     in-out property <string> input-text;
@@ -150,6 +160,8 @@ export component MainWindow inherits Window {
     in-out property <bool> clip-busy: false;
     in-out property <int> clip-percent: 0;
     in-out property <string> clip-label;
+    // unified search: the background CLIP/OCR lookup for the shown query is running
+    in-out property <bool> searching: false;
 
     min-width: 760px;
     max-width: 760px;
@@ -261,6 +273,9 @@ export component MainWindow inherits Window {
                                 if root.mode == 0 && self.text != "" {
                                     root.search_all(self.text);
                                 }
+                                if root.mode == 0 && self.text == "" {
+                                    root.show_home();
+                                }
                                 if root.mode == 1 {
                                     root.search_apps(self.text);
                                 }
@@ -271,8 +286,11 @@ export component MainWindow inherits Window {
                                 root.run_query(self.text);
                             }
                             accepted => {
-                                // a calc/currency result is shown: Enter must not open the fuzzy hit under it
+                                // a calc/currency result is shown: Enter copies it instead of opening the fuzzy hit under it
                                 if root.mode != 3 && root.query-result != "" {
+                                    copy-buf.select-all();
+                                    copy-buf.copy();
+                                    root.hide-window();
                                     return;
                                 }
                                 // sel stays -1 in power mode until an arrow picks a button
@@ -280,7 +298,7 @@ export component MainWindow inherits Window {
                                     root.move-sel(0);
                                 }
                                 if root.mode == 0 {
-                                    if self.text == "" {
+                                    if self.text == "" && root.apps.length == 0 {
                                         return;
                                     }
                                     if root.sel < root.apps.length {
@@ -344,92 +362,149 @@ if root.input-text == "": Text {
                 }
             }
 
-            if root.query-result != "": Rectangle {
-                height: 44px;
-                background: Theme.surface;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: Theme.border;
+            // Fixed-height results area: the window never changes size, so the
+            // compositor never re-centers it and the search field stays put.
+            Rectangle {
+                height: 350px;
+                clip: true;
 
-                Text {
-                    text: root.query-result;
-                    color: Theme.accent;
-                    font-size: 15px;
-                    vertical-alignment: center;
+                // nothing to show yet while the lookup runs: say so instead of a dead box
+                if root.mode == 0 && root.searching && root.input-text != "" && root.apps.length == 0 && root.files.length == 0 && root.query-result == "": Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: "Searching...";
+                    color: Theme.text-dim;
+                    font-size: 13px;
                     horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
-            }
 
-            if root.indexing: ProgressBar {
-                label: "Indexing files...";
-                percent: root.index-percent;
-            }
+                VerticalLayout {
+                    spacing: 12px;
 
-            // Model download / photo indexing, same progress-bar style.
-            if root.clip-busy: ProgressBar {
-                label: root.clip-label;
-                percent: root.clip-percent;
-            }
+                    // calc/currency card: query on the left, answer on the right
+                    if root.query-result != "": Rectangle {
+                        height: 120px;
+                        background: Theme.surface;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.border;
 
-            if root.mode == 1: AppsView {
-                apps: root.apps;
-                categories: root.categories;
-                selected-category <=> root.selected-category;
-                sel <=> root.sel;
-                cols <=> root.cols;
-                tip-sel <=> root.tip-sel;
-                filter_category(category) => { root.filter_category(category); }
-                launch-app(app) => { root.launch-app(app); }
-                toggle-pin(app) => { root.toggle-pin(app); }
-                hide-window => { root.hide-window(); }
-                hover-tip(hover, idx, name, x, y, h) => { root.hover-tip(hover, idx, name, x, y, h); }
-            }
+                        HorizontalLayout {
+                            padding-left: 24px;
+                            padding-right: 24px;
+                            spacing: 16px;
 
-            if root.mode == 2 || root.mode == 4: FilesView {
-                files: root.files;
-                input-text: root.input-text;
-                files-sort <=> root.files-sort;
-                sel <=> root.sel;
-                cols <=> root.cols;
-                tip-sel <=> root.tip-sel;
-                show_files => { root.show_files(); }
-                search_files(query) => { root.search_files(query); }
-                open-file(file) => { root.open-file(file); }
-                hide-window => { root.hide-window(); }
-                hover-tip(hover, idx, name, x, y, h) => { root.hover-tip(hover, idx, name, x, y, h); }
-            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: root.input-text;
+                                color: Theme.text-dim;
+                                font-size: 18px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
 
-            if root.mode == 3: PowerView {
-                power-opts: root.power-opts;
-                sel <=> root.sel;
-                power-action(action) => { root.power-action(action); }
-            }
+                            Text {
+                                text: "→";
+                                color: Theme.text-dim;
+                                font-size: 18px;
+                                vertical-alignment: center;
+                            }
 
-            if root.mode == 5: SettingsView {
-                settings: root.settings;
-                settings-error: root.settings-error;
-                needs-restart: root.needs-restart;
-                agents: root.agents;
-                agents-idle: root.agents-idle;
-                agent-toggle(i) => { root.agent-toggle(i); }
-                setting-toggle(key) => { root.setting-toggle(key); }
-                setting-text(key, text) => { root.setting-text(key, text); }
-                setting-list-set(key, i, text) => { root.setting-list-set(key, i, text); }
-                setting-list-add(key, text) => { root.setting-list-add(key, text); }
-                setting-list-remove(key, i) => { root.setting-list-remove(key, i); }
-                restart => { root.restart(); }
-            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: root.query-result;
+                                color: Theme.accent;
+                                font-size: 30px;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                                overflow: elide;
+                            }
+                        }
 
-            // Unified search from the main view: apps first, files below
-            if root.mode == 0 && root.input-text != "": MixedView {
-                apps: root.apps;
-                files: root.files;
-                sel <=> root.sel;
-                tip-sel <=> root.tip-sel;
-                launch-app(app) => { root.launch-app(app); }
-                open-file(file) => { root.open-file(file); }
-                hide-window => { root.hide-window(); }
-                hover-tip(hover, idx, name, x, y, h) => { root.hover-tip(hover, idx, name, x, y, h); }
+                        Text {
+                            x: parent.width - self.width - 12px;
+                            y: parent.height - self.height - 8px;
+                            text: "Enter: copy";
+                            color: Theme.text-dim;
+                            font-size: 11px;
+                        }
+                    }
+
+                    if root.indexing: ProgressBar {
+                        label: "Indexing files...";
+                        percent: root.index-percent;
+                    }
+
+                    // Model download / photo indexing, same progress-bar style.
+                    if root.clip-busy: ProgressBar {
+                        label: root.clip-label;
+                        percent: root.clip-percent;
+                    }
+
+                    if root.mode == 1: AppsView {
+                        apps: root.apps;
+                        categories: root.categories;
+                        selected-category <=> root.selected-category;
+                        sel <=> root.sel;
+                        cols <=> root.cols;
+                        tip-sel <=> root.tip-sel;
+                        filter_category(category) => { root.filter_category(category); }
+                        launch-app(app) => { root.launch-app(app); }
+                        toggle-pin(app) => { root.toggle-pin(app); }
+                        hide-window => { root.hide-window(); }
+                        hover-tip(hover, idx, name, x, y, h) => { root.hover-tip(hover, idx, name, x, y, h); }
+                    }
+
+                    if root.mode == 2 || root.mode == 4: FilesView {
+                        files: root.files;
+                        input-text: root.input-text;
+                        files-sort <=> root.files-sort;
+                        sel <=> root.sel;
+                        cols <=> root.cols;
+                        tip-sel <=> root.tip-sel;
+                        show_files => { root.show_files(); }
+                        search_files(query) => { root.search_files(query); }
+                        open-file(file) => { root.open-file(file); }
+                        hide-window => { root.hide-window(); }
+                        hover-tip(hover, idx, name, x, y, h) => { root.hover-tip(hover, idx, name, x, y, h); }
+                    }
+
+                    if root.mode == 3: PowerView {
+                        power-opts: root.power-opts;
+                        sel <=> root.sel;
+                        power-action(action) => { root.power-action(action); }
+                    }
+
+                    if root.mode == 5: SettingsView {
+                        settings: root.settings;
+                        settings-error: root.settings-error;
+                        needs-restart: root.needs-restart;
+                        agents: root.agents;
+                        agents-idle: root.agents-idle;
+                        agent-toggle(i) => { root.agent-toggle(i); }
+                        setting-toggle(key) => { root.setting-toggle(key); }
+                        setting-text(key, text) => { root.setting-text(key, text); }
+                        setting-list-set(key, i, text) => { root.setting-list-set(key, i, text); }
+                        setting-list-add(key, text) => { root.setting-list-add(key, text); }
+                        setting-list-remove(key, i) => { root.setting-list-remove(key, i); }
+                        restart => { root.restart(); }
+                    }
+
+                    // Unified search from the main view: apps first, files below;
+                    // with an empty query only the apps list
+                    if root.mode == 0: MixedView {
+                        apps: root.apps;
+                        files: root.input-text == "" ? root.no-files : root.files;
+                        home: root.input-text == "";
+                        sel <=> root.sel;
+                        tip-sel <=> root.tip-sel;
+                        launch-app(app) => { root.launch-app(app); }
+                        open-file(file) => { root.open-file(file); }
+                        hide-window => { root.hide-window(); }
+                        hover-tip(hover, idx, name, x, y, h) => { root.hover-tip(hover, idx, name, x, y, h); }
+                    }
+                }
             }
 
             // Footer hint bar, Walker-style
@@ -487,6 +562,13 @@ if root.input-text == "": Text {
             }
 
         }
+    }
+
+    // Enter on a calc/currency card copies through this: Slint's own clipboard,
+    // so no wl-copy/xclip needed
+    copy-buf := TextInput {
+        visible: false;
+        text: root.query-result;
     }
 
     // Drawn last at the root so the scroll views don't clip it: below the

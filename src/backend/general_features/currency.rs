@@ -31,8 +31,8 @@ pub fn parse_query(input: &str) -> Option<(f64, String, String)> {
     Some((caps[1].parse().ok()?, caps[2].to_uppercase(), caps[3].to_uppercase()))
 }
 
-pub fn format_result(amount: f64, from: &str, to: &str, price: f64) -> String {
-    format!("{amount} {from} = {price:.2} {to}")
+pub fn format_result(to: &str, price: f64) -> String {
+    format!("{price:.2} {to}")
 }
 
 pub fn convert(_from: &str, _to: &str, amount: f64) -> Result<CurrencyOuput> {
@@ -75,6 +75,6 @@ mod tests {
 
     #[test]
     fn output_format() {
-        assert_eq!(format_result(100.0, "USD", "EUR", 92.3149), "100 USD = 92.31 EUR");
+        assert_eq!(format_result("EUR", 92.3149), "92.31 EUR");
     }
 }
