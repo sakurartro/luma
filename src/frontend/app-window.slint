@@ -160,6 +160,8 @@ export component MainWindow inherits Window {
     in-out property <bool> clip-busy: false;
     in-out property <int> clip-percent: 0;
     in-out property <string> clip-label;
+    // unified search: the background CLIP/OCR lookup for the shown query is running
+    in-out property <bool> searching: false;
 
     min-width: 760px;
     max-width: 760px;
@@ -366,6 +368,17 @@ if root.input-text == "": Text {
                 height: 350px;
                 clip: true;
 
+                // nothing to show yet while the lookup runs: say so instead of a dead box
+                if root.mode == 0 && root.searching && root.input-text != "" && root.apps.length == 0 && root.files.length == 0 && root.query-result == "": Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: "Searching...";
+                    color: Theme.text-dim;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
                 VerticalLayout {
                     spacing: 12px;
 
@@ -483,6 +496,7 @@ if root.input-text == "": Text {
                     if root.mode == 0: MixedView {
                         apps: root.apps;
                         files: root.input-text == "" ? root.no-files : root.files;
+                        home: root.input-text == "";
                         sel <=> root.sel;
                         tip-sel <=> root.tip-sel;
                         launch-app(app) => { root.launch-app(app); }
