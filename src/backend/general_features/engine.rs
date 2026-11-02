@@ -6,7 +6,7 @@ use regex::Regex;
 pub fn general_engine(input: String, currency_enabled: bool) -> Result<String> {
     if currency_enabled && let Some((amount, from, to)) = currency::parse_query(&input) {
         let data = currency::convert(&from, &to, amount)?;
-        return Ok(currency::format_result(amount, &from, &to, data.price));
+        return Ok(currency::format_result(&to, data.price));
     }
     // Only math characters and at least one binary operator, so "2", "hello" or
     // "2024-10 report" show nothing; a half-typed "2+" shows nothing either.

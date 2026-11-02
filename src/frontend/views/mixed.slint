@@ -24,8 +24,12 @@ export component MixedView {
         }
 
         SelScrollView {
-            // shrink with the result count, cap at the scroll threshold
-            height: min(140px, root.apps.length * 32px);
+            // shrink with the result count, cap at the scroll threshold; alone it
+            // takes the whole area. Can also shrink when a calc result is shown.
+            property <length> want: root.files.length == 0 ? root.apps.length * 32px : min(140px, root.apps.length * 32px);
+            preferred-height: self.want;
+            max-height: self.want;
+            min-height: min(64px, self.want);
             item-y: root.sel < root.apps.length ? root.sel * 32px : -1px;
             item-height: 30px;
             scrolled => { root.tip-sel = -1; }
@@ -89,7 +93,10 @@ export component MixedView {
         }
 
         SelScrollView {
-            height: min(140px, root.files.length * 32px);
+            property <length> want: root.apps.length == 0 ? root.files.length * 32px : min(140px, root.files.length * 32px);
+            preferred-height: self.want;
+            max-height: self.want;
+            min-height: min(64px, self.want);
             item-y: root.sel >= root.apps.length ? (root.sel - root.apps.length) * 32px : -1px;
             item-height: 30px;
             scrolled => { root.tip-sel = -1; }
