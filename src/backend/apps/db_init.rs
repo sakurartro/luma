@@ -110,6 +110,19 @@ impl DbState {
                 mtime INTEGER NOT NULL DEFAULT 0,
                 text TEXT NOT NULL
             );
+
+            -- Document text search. doc_meta answers "is the file stale"
+            -- (a scan without text has a meta row but no doc_fts row);
+            -- doc_fts holds the text. No FK, same reason as ocr_text.
+            CREATE TABLE IF NOT EXISTS doc_meta (
+                file_path TEXT PRIMARY KEY,
+                mtime INTEGER NOT NULL
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
+                file_path UNINDEXED,
+                body,
+                tokenize = 'porter unicode61 remove_diacritics 2'
+            );
             "#,
         )?;
 

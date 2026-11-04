@@ -15,10 +15,12 @@ export struct FileItem {
     // image thumbnail filled in by a background worker; empty = show the icon
     thumb: image,
     // 0 = matched by name (default, no badge), 1 = semantic (CLIP),
-    // 2 = by the text on the image (OCR)
+    // 2 = by the text on the image (OCR), 3 = by the text inside a document
     match-kind: int,
-    // match strength in 0-100 percent, only for match-kind 1 and 2
+    // match strength in 0-100 percent, only for match-kind 1, 2 and 3
     match-score: int,
+    // text around the match for a hit inside a document; "" = none (the row shows the path)
+    snippet: string,
 }
 
 // One row of the Agents section in the settings menu, see ui/settings.rs
