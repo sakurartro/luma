@@ -18,9 +18,9 @@ pub struct Limits {
 impl From<&Settings> for Limits {
     fn from(s: &Settings) -> Self {
         Limits {
-            file_bytes: s.max_file_mb.saturating_mul(1024 * 1024),
-            text_bytes: s.max_text_kb.saturating_mul(1024),
-            pdf_pages: s.max_pdf_pages,
+            file_bytes: s.docs_max_file_mb.saturating_mul(1024 * 1024),
+            text_bytes: s.docs_max_text_kb.saturating_mul(1024),
+            pdf_pages: s.docs_max_pdf_pages,
         }
     }
 }
@@ -221,7 +221,7 @@ mod tests {
         l.pdf_pages = 0;
         assert_eq!(extract(&p, &l), "");
         // settings.json values are converted from MB / KB
-        let s = Settings { max_file_mb: 2, max_text_kb: 3, ..Settings::default() };
+        let s = Settings { docs_max_file_mb: 2, docs_max_text_kb: 3, ..Settings::default() };
         let l = Limits::from(&s);
         assert_eq!((l.file_bytes, l.text_bytes), (2 << 20, 3 << 10));
     }

@@ -37,14 +37,14 @@ pub struct Settings {
     #[serde(default)]
     pub docs: bool,
     // Document indexing limits (settings.json only): a file bigger than
-    // max_file_mb is skipped; max_text_kb of text and max_pdf_pages
+    // docs_max_file_mb is skipped; docs_max_text_kb of text and docs_max_pdf_pages
     // pages are indexed per file. Apply after a restart.
     #[serde(default = "default_max_file_mb")]
-    pub max_file_mb: u64,
+    pub docs_max_file_mb: u64,
     #[serde(default = "default_max_text_kb")]
-    pub max_text_kb: usize,
+    pub docs_max_text_kb: usize,
     #[serde(default = "default_max_pdf_pages")]
-    pub max_pdf_pages: u32,
+    pub docs_max_pdf_pages: u32,
     // Local API for AI agents (`luma query`, MCP); off by default.
     #[serde(default)]
     pub agent_api: bool,
@@ -99,9 +99,9 @@ impl Default for Settings {
             semantic: false,
             ocr: false,
             docs: false,
-            max_file_mb: default_max_file_mb(),
-            max_text_kb: default_max_text_kb(),
-            max_pdf_pages: default_max_pdf_pages(),
+            docs_max_file_mb: default_max_file_mb(),
+            docs_max_text_kb: default_max_text_kb(),
+            docs_max_pdf_pages: default_max_pdf_pages(),
             agent_api: false,
             currency: default_currency(),
         }
@@ -341,20 +341,20 @@ mod tests {
     fn template_includes_docs_off_and_limits() {
         let json = serde_json::to_string(&Settings::default()).unwrap();
         assert!(json.contains(r#""docs":false"#));
-        assert!(json.contains(r#""max_file_mb":10"#));
-        assert!(json.contains(r#""max_text_kb":256"#));
-        assert!(json.contains(r#""max_pdf_pages":30"#));
+        assert!(json.contains(r#""docs_max_file_mb":10"#));
+        assert!(json.contains(r#""docs_max_text_kb":256"#));
+        assert!(json.contains(r#""docs_max_pdf_pages":30"#));
     }
 
     #[test]
     fn numbers_are_edited_as_text() {
-        let json = change(&template(), "max_pdf_pages", Change::Text(" 50 ".into()));
-        assert_eq!(json["max_pdf_pages"], 50);
+        let json = change(&template(), "docs_max_pdf_pages", Change::Text(" 50 ".into()));
+        assert_eq!(json["docs_max_pdf_pages"], 50);
         for bad in ["", "abc", "-1", "1.5"] {
-            assert!(with_change(&template(), "max_pdf_pages", Change::Text(bad.into())).is_err(), "{bad}");
+            assert!(with_change(&template(), "docs_max_pdf_pages", Change::Text(bad.into())).is_err(), "{bad}");
         }
         // fits u64 but not the u32 field: Settings validation rejects it
-        assert!(with_change(&template(), "max_pdf_pages", Change::Text("99999999999".into())).is_err());
+        assert!(with_change(&template(), "docs_max_pdf_pages", Change::Text("99999999999".into())).is_err());
     }
 
     #[test]

@@ -19,7 +19,7 @@ type StartValues = (Vec<String>, bool, bool, bool, Vec<String>, (u64, usize, u32
 static STARTED_WITH: OnceLock<StartValues> = OnceLock::new();
 
 fn restart_values(st: &Settings) -> StartValues {
-    (st.search_dirs.clone(), st.semantic, st.ocr, st.docs, st.exclude_dirs.clone(), (st.max_file_mb, st.max_text_kb, st.max_pdf_pages))
+    (st.search_dirs.clone(), st.semantic, st.ocr, st.docs, st.exclude_dirs.clone(), (st.docs_max_file_mb, st.docs_max_text_kb, st.docs_max_pdf_pages))
 }
 
 pub fn remember_startup(st: &Settings) {
@@ -47,7 +47,7 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ("Appearance", &["bg", "surface", "hover", "selected", "border", "accent", "text", "text_dim"]),
     ("Files", &["search_dirs", "hide_patterns", "exclude_dirs"]),
     ("Photos", &["semantic", "ocr"]),
-    ("Documents", &["docs", "max_file_mb", "max_text_kb", "max_pdf_pages"]),
+    ("Documents", &["docs", "docs_max_file_mb", "docs_max_text_kb", "docs_max_pdf_pages"]),
     ("Calculator", &["currency"]),
 ];
 
@@ -55,7 +55,11 @@ const CATEGORIES: &[(&str, &[&str])] = &[
 const HIDDEN: &str = "agent_api";
 
 fn field(key: &str, value: &Value) -> Option<SettingField> {
-    let mut field = SettingField { key: key.into(), ..Default::default() };
+    let mut field = SettingField {
+        key: key.into(),
+        label: key.strip_prefix("docs_").unwrap_or(key).into(),
+        ..Default::default()
+    };
     match value {
         Value::Bool(on) => field.on = *on,
         Value::String(s) => {
@@ -423,7 +427,7 @@ mod tests {
 
     #[test]
     fn numbers_show_as_text_rows() {
-        let obj = serde_json::json!({"max_pdf_pages": 30});
+        let obj = serde_json::json!({"docs_max_pdf_pages": 30});
         let rows = fields(obj.as_object().unwrap());
         assert_eq!((rows[0].kind, rows[0].text.as_str(), rows[0].heading.as_str()), (2, "30", "Documents"));
     }

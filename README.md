@@ -112,6 +112,7 @@ Transparency on X11 requires a compositor — GNOME and KDE ship one by default.
 - Fuzzy search of applications and files
 - Semantic photo search (CLIP) — opt-in; matching files show a `S(N%)` match-strength badge
 - Text-in-image search (OCR) — opt-in; matching files show a `T(N%)` badge
+- Full-text search inside documents (txt, md, pdf, docx…) — opt-in; matches show a snippet of the text
 - Calculator (`2 + 2`) and currency conversion (`100 usd to eur`)
 
 **Apps**
@@ -200,6 +201,7 @@ falls back to defaults and is kept.
 | `exclude_dirs` | `[]` | Folders inside `search_dirs` that are never scanned, watched or fed to semantic/OCR indexing, e.g. `["~/Pictures/private"]` |
 | `semantic` | `false` | Photo search by meaning (CLIP, English queries). Downloads ~154 MB of models, indexes photos in the background |
 | `ocr` | `false` | Image search by the text on them (PaddleOCR, English). Downloads ~12 MB of models, runs after semantic indexing |
+| `docs` | `false` | Search inside document contents (txt, md, pdf, docx…). Text goes into the local db. Limits `docs_max_file_mb`, `docs_max_text_kb`, `docs_max_pdf_pages` are tunable in settings.json |
 | `agent_api` | `false` | Lets agents query Luma (`luma mcp`, `luma query`). Set by Settings → Agents |
 | `currency` | `true` | `100 usd to eur` via open.er-api.com, rates cached for an hour. `false` = no network; the calculator still works |
 
@@ -223,6 +225,7 @@ Full example (the defaults):
   "exclude_dirs": [],
   "semantic": false,
   "ocr": false,
+  "docs": false,
   "agent_api": false,
   "currency": true
 }

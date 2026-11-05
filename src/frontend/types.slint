@@ -34,6 +34,8 @@ export struct AgentRow {
 // One settings.json key in the settings menu, see ui/settings.rs
 export struct SettingField {
     key: string,
+    // row caption: key without the "docs_" prefix
+    label: string,
     // 0 = bool, 1 = "#RRGGBB" color, 2 = other string, 3 = list of strings
     kind: int,
     text: string,
