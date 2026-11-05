@@ -1,7 +1,7 @@
 use crate::backend;
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::apps::fuzzy;
-use crate::backend::files::clip;
+use crate::backend::files::{clip, docs};
 use crate::backend::files::db_service as files_db;
 use crate::backend::files::files_search::{self, FileEntry};
 use crate::backend::files::ocr;
@@ -87,6 +87,7 @@ pub(super) fn build_file_item(file: &FileEntry, match_kind: i32, match_score: i3
         thumb: slint::Image::default(),
         match_kind,
         match_score,
+        snippet: Default::default(),
     }
 }
 
@@ -177,6 +178,36 @@ pub(super) fn extra_file_items(
         .collect()
 }
 
+// Files with the query inside their text (document index), best first, each
+// with a snippet. Same filters as extra_file_items; runs on a worker thread.
+pub(super) fn doc_file_items(
+    query: &str,
+    shown: &std::collections::HashSet<String>,
+    hide_patterns: &[String],
+    limit: usize,
+) -> Vec<(FileEntry, String, i32)> {
+    if limit == 0 || !docs::docs_enabled() {
+        return Vec::new();
+    }
+    // asks for more than `limit`: some hits are dropped below
+    let hits = open_conn()
+        .and_then(|conn| docs::docs_search(&conn, query, limit + 50))
+        .unwrap_or_else(|err| {
+            eprintln!("docs search error: {err}");
+            Vec::new()
+        });
+    hits.into_iter()
+        .filter(|hit| !shown.contains(hit.path.as_str()))
+        .map(|hit| {
+            let name = Path::new(&hit.path).file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let entry = FileEntry { name_lower: Vec::new(), name, path: hit.path, is_dir: false, mtime: 0 };
+            (entry, hit.snippet, hit.score)
+        })
+        .filter(|(f, _, _)| !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str())))
+        .take(limit)
+        .collect()
+}
+
 // Folders stay in front in every sort mode; ties broken by name.
 // Sort modes: 1 = newest first, 2 = oldest first, 0 = untouched.
 fn sort_entries(entries: &mut [&FileEntry], sort: i32) {
@@ -201,6 +232,9 @@ fn sort_entries(entries: &mut [&FileEntry], sort: i32) {
 fn is_photo(file: &FileEntry) -> bool {
     !file.is_dir && files_search::is_image(&file.path)
 }
+
+// Cap on document hits shown above the name matches in the Files tab
+const MAX_DOC_HITS: usize = 20;
 
 // Filtered + sorted files tab content. Sort modes: 0 = name (the order
 // get_files returns), 1 = newest first, 2 = oldest first.
@@ -283,6 +317,12 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     let base_len = items.len();
                     let generation = clip::next_query();
                     std::thread::spawn(move || {
+                        // photos mode: documents are not images
+                        let doc_items = if mode == 4 {
+                            Vec::new()
+                        } else {
+                            doc_file_items(query.as_str(), &fuzzy_paths, &[], MAX_DOC_HITS)
+                        };
                         let extra_items = extra_file_items(
                             query.as_str(),
                             generation,
@@ -300,8 +340,12 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                                     && !clip::is_stale(generation)
                                 {
                                     // the shown fuzzy rows, with any thumbnails they got
-                                    let mut all: Vec<FileItem> =
-                                        window.get_files().iter().take(base_len).collect();
+                                    // document hits go on top
+                                    let mut all: Vec<FileItem> = doc_items
+                                        .into_iter()
+                                        .map(|(f, _, score)| build_file_item(&f, docs::MATCH_DOC, score))
+                                        .collect();
+                                    all.extend(window.get_files().iter().take(base_len));
                                     all.extend(extra_items.into_iter().map(|(f, kind, score)| {
                                         build_file_item(&f, kind, score)
                                     }));

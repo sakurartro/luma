@@ -10,7 +10,7 @@ use backend::apps::apps_search::Apps;
 use backend::apps::db_init::{DbState, open_conn};
 use backend::apps::watcher::start_watcher;
 use backend::files::clip;
-use backend::files::ocr;
+use backend::files::{docs, ocr};
 use backend::files::files_search;
 use backend::files::watcher::start_files_watcher;
 use backend::settings;
@@ -161,7 +161,7 @@ fn main() -> Result<()> {
                 *INIT_DB.lock().unwrap() = Some(db_state);
 
                 // Own connection: db_state.conn already moved to the UI side.
-                let dirs = st.search_dirs;
+                let dirs = st.search_dirs.clone();
                 match open_conn() {
                     Ok(mut conn) => {
                         if let Err(err) = files_search::scan_dirs(&mut conn, &dirs, &st.exclude_dirs) {
@@ -177,6 +177,8 @@ fn main() -> Result<()> {
                 // Waits for the clip worker, so keep it after the call above;
                 // no-op when the `ocr` setting is off.
                 ocr::start_indexing(st.ocr);
+                // Needs only the finished scan; no-op when the `docs` setting is off.
+                docs::start_indexing(&st);
             }
             Err(err) => eprintln!("init error: {err}"),
         }

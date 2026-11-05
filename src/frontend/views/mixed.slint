@@ -73,7 +73,6 @@ export component MixedView {
                     mixed-app-touch := TouchArea {
                         // mouse and arrows share one selection
                         changed has-hover => {
-                            if self.has-hover { root.sel = i; }
                             root.hover-tip(self.has-hover, i, mixed-app-name.preferred-width > mixed-app-name.width ? app.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
                         }
 
@@ -137,7 +136,7 @@ export component MixedView {
                         }
 
                         Text {
-                            text: file.path;
+                            text: file.snippet != "" ? file.snippet : file.path;
                             color: Theme.text-dim;
                             font-size: 12px;
                             vertical-alignment: center;
@@ -146,9 +145,9 @@ export component MixedView {
                         }
 
                         // How the file matched: S(87%) = semantic (CLIP), T(40%) = text on the
-// image (OCR).
-                        if file.match-kind == 1 || file.match-kind == 2: Text {
-                            text: (file.match-kind == 2 ? "T(" : "S(") + file.match-score + "%)";
+// image (OCR), D = text inside a document.
+                        if file.match-kind >= 1: Text {
+                            text: file.match-kind == 3 ? "D" : (file.match-kind == 2 ? "T(" : "S(") + file.match-score + "%)";
                             color: Theme.accent;
                             font-size: 11px;
                             width: 46px;
@@ -161,7 +160,6 @@ export component MixedView {
                     mixed-file-touch := TouchArea {
                         // mouse and arrows share one selection
                         changed has-hover => {
-                            if self.has-hover { root.sel = i + root.apps.length; }
                             root.hover-tip(self.has-hover, i + root.apps.length, mixed-file-name.preferred-width > mixed-file-name.width ? file.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
                         }
 

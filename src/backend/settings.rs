@@ -32,6 +32,19 @@ pub struct Settings {
     // are downloaded from HuggingFace on the next start (~12 MB).
     #[serde(default)]
     pub ocr: bool,
+    // Full-text search inside documents (txt, md, pdf, docx...); off by default.
+    // File contents go into the local db, so the user opts in.
+    #[serde(default)]
+    pub docs: bool,
+    // Document indexing limits (settings.json only): a file bigger than
+    // docs_max_file_mb is skipped; docs_max_text_kb of text and docs_max_pdf_pages
+    // pages are indexed per file. Apply after a restart.
+    #[serde(default = "default_max_file_mb")]
+    pub docs_max_file_mb: u64,
+    #[serde(default = "default_max_text_kb")]
+    pub docs_max_text_kb: usize,
+    #[serde(default = "default_max_pdf_pages")]
+    pub docs_max_pdf_pages: u32,
     // Local API for AI agents (`luma query`, MCP); off by default.
     #[serde(default)]
     pub agent_api: bool,
@@ -39,6 +52,18 @@ pub struct Settings {
     // no network request is made, the calculator keeps working.
     #[serde(default = "default_currency")]
     pub currency: bool,
+}
+
+fn default_max_file_mb() -> u64 {
+    10
+}
+
+fn default_max_text_kb() -> usize {
+    256
+}
+
+fn default_max_pdf_pages() -> u32 {
+    30
 }
 
 fn default_currency() -> bool {
@@ -73,6 +98,10 @@ impl Default for Settings {
             exclude_dirs: Vec::new(),
             semantic: false,
             ocr: false,
+            docs: false,
+            docs_max_file_mb: default_max_file_mb(),
+            docs_max_text_kb: default_max_text_kb(),
+            docs_max_pdf_pages: default_max_pdf_pages(),
             agent_api: false,
             currency: default_currency(),
         }
@@ -164,6 +193,11 @@ fn with_change(text: &str, key: &str, change: Change) -> anyhow::Result<(String,
                 anyhow::bail!("{key}: expected #RRGGBB, got {new:?}");
             }
             *s = new;
+        }
+        // the menu edits numbers as text; Settings validates the range below
+        (Value::Number(n), Change::Text(new)) => {
+            let parsed = new.trim().parse::<u64>().map_err(|_| anyhow::anyhow!("{key}: expected a whole number, got {new:?}"))?;
+            *n = parsed.into();
         }
         (Value::Array(items), Change::ListSet(i, new)) if i < items.len() => {
             if new.is_empty() {
@@ -301,6 +335,26 @@ mod tests {
             assert!(with_change(&t, "accent", Change::Text(bad.into())).is_err(), "{bad}");
         }
         assert_eq!(change(&t, "accent", Change::Text("#a1B2c3".into()))["accent"], "#a1B2c3");
+    }
+
+    #[test]
+    fn template_includes_docs_off_and_limits() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains(r#""docs":false"#));
+        assert!(json.contains(r#""docs_max_file_mb":10"#));
+        assert!(json.contains(r#""docs_max_text_kb":256"#));
+        assert!(json.contains(r#""docs_max_pdf_pages":30"#));
+    }
+
+    #[test]
+    fn numbers_are_edited_as_text() {
+        let json = change(&template(), "docs_max_pdf_pages", Change::Text(" 50 ".into()));
+        assert_eq!(json["docs_max_pdf_pages"], 50);
+        for bad in ["", "abc", "-1", "1.5"] {
+            assert!(with_change(&template(), "docs_max_pdf_pages", Change::Text(bad.into())).is_err(), "{bad}");
+        }
+        // fits u64 but not the u32 field: Settings validation rejects it
+        assert!(with_change(&template(), "docs_max_pdf_pages", Change::Text("99999999999".into())).is_err());
     }
 
     #[test]

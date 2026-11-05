@@ -134,7 +134,6 @@ export component AppsView {
                     app-touch := TouchArea {
                         // mouse and arrows share one selection
                         changed has-hover => {
-                            if self.has-hover { root.sel = i; }
                             root.hover-tip(self.has-hover, i, app-name.preferred-width > app-name.width ? app.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
                         }
 
