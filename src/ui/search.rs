@@ -17,6 +17,8 @@ use super::files::{build_file_item, doc_file_items, extra_file_items, load_files
 
 // Per-section cap for the unified (main view) search
 const MAX_MIXED: usize = 20;
+// Document hits get their own slots: name matches can fill all of MAX_MIXED
+const MAX_MIXED_DOCS: usize = 5;
 
 // Push file-index progress into the UI; called from the 30ms drain timer.
 pub fn update_index_progress(window: &MainWindow) {
@@ -136,13 +138,13 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     std::thread::spawn(move || {
                         // After the name matches, before the semantic guesses.
                         let room = MAX_MIXED - base_len.min(MAX_MIXED);
-                        let doc_items = doc_file_items(query.as_str(), &fuzzy_paths, &hide_patterns, room);
+                        let doc_items = doc_file_items(query.as_str(), &fuzzy_paths, &hide_patterns, MAX_MIXED_DOCS);
                         let extra_items = extra_file_items(
                             query.as_str(),
                             generation,
                             &fuzzy_paths,
                             &hide_patterns,
-                            room - doc_items.len(),
+                            room,
                         );
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(window) = weak.upgrade() {
