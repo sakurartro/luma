@@ -73,7 +73,6 @@ export component MixedView {
                     mixed-app-touch := TouchArea {
                         // mouse and arrows share one selection
                         changed has-hover => {
-                            if self.has-hover { root.sel = i; }
                             root.hover-tip(self.has-hover, i, mixed-app-name.preferred-width > mixed-app-name.width ? app.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
                         }
 
@@ -161,7 +160,6 @@ export component MixedView {
                     mixed-file-touch := TouchArea {
                         // mouse and arrows share one selection
                         changed has-hover => {
-                            if self.has-hover { root.sel = i + root.apps.length; }
                             root.hover-tip(self.has-hover, i + root.apps.length, mixed-file-name.preferred-width > mixed-file-name.width ? file.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
                         }
 
