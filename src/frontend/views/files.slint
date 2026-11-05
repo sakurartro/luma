@@ -167,7 +167,6 @@ export component FilesView {
                     file-touch := TouchArea {
                         // mouse and arrows share one selection
                         changed has-hover => {
-                            if self.has-hover { root.sel = i; }
                             root.hover-tip(self.has-hover, i, file-name.preferred-width > file-name.width ? file.name : "", self.absolute-position.x, self.absolute-position.y, self.height);
                         }
 

@@ -81,15 +81,27 @@ export component MainWindow inherits Window {
 
     // name is "" when the item's label fits; leaving an item only clears its own
     // plate, since the next item's hover may arrive first
+    // The mouse borrows sel while hovering and gives the keyboard's back on leave,
+    // so a pointer exiting the window leaves no stale highlight.
+    property <int> hover-idx: -1;
+    property <int> kbd-sel;
     function hover-tip(hover: bool, idx: int, name: string, x: length, y: length, h: length) {
         if hover {
+            if root.hover-idx == -1 { root.kbd-sel = root.sel; }
+            root.hover-idx = idx;
+            root.sel = idx;
             root.tip-sel = idx;
             root.tip-text = name;
             root.tip-x = x;
             root.tip-y = y;
             root.tip-h = h;
-        } else if root.tip-sel == idx {
-            root.tip-sel = -1;
+        } else {
+            if root.hover-idx == idx {
+                root.hover-idx = -1;
+                // arrows may have moved sel meanwhile; keep that
+                if root.sel == idx { root.sel = root.kbd-sel; }
+            }
+            if root.tip-sel == idx { root.tip-sel = -1; }
         }
     }
 
