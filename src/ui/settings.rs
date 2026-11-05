@@ -13,12 +13,13 @@ use std::thread;
 
 use super::Ctx;
 
-// search_dirs / semantic / ocr / exclude_dirs as the watcher and indexers got
+// search_dirs / semantic / ocr / docs (and its limits) / exclude_dirs as the watcher and indexers got
 // them at startup; they can't be reconfigured live, so a difference asks for a restart.
-static STARTED_WITH: OnceLock<(Vec<String>, bool, bool, Vec<String>)> = OnceLock::new();
+type StartValues = (Vec<String>, bool, bool, bool, Vec<String>, (u64, usize, u32));
+static STARTED_WITH: OnceLock<StartValues> = OnceLock::new();
 
-fn restart_values(st: &Settings) -> (Vec<String>, bool, bool, Vec<String>) {
-    (st.search_dirs.clone(), st.semantic, st.ocr, st.exclude_dirs.clone())
+fn restart_values(st: &Settings) -> StartValues {
+    (st.search_dirs.clone(), st.semantic, st.ocr, st.docs, st.exclude_dirs.clone(), (st.max_file_mb, st.max_text_kb, st.max_pdf_pages))
 }
 
 pub fn remember_startup(st: &Settings) {
@@ -46,6 +47,7 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ("Appearance", &["bg", "surface", "hover", "selected", "border", "accent", "text", "text_dim"]),
     ("Files", &["search_dirs", "hide_patterns", "exclude_dirs"]),
     ("Photos", &["semantic", "ocr"]),
+    ("Documents", &["docs", "max_file_mb", "max_text_kb", "max_pdf_pages"]),
     ("Calculator", &["currency"]),
 ];
 
@@ -67,7 +69,12 @@ fn field(key: &str, value: &Value) -> Option<SettingField> {
                 items.iter().filter_map(Value::as_str).map(Into::into).collect();
             field.items = Rc::new(VecModel::from(items)).into();
         }
-        // shortcut: numbers, objects and mixed lists are not shown; add a kind when Settings gets one
+        // numbers are edited as text (kind 2)
+        Value::Number(n) => {
+            field.kind = 2;
+            field.text = n.to_string().into();
+        }
+        // shortcut: objects and mixed lists are not shown; add a kind when Settings gets one
         _ => return None,
     }
     Some(field)
@@ -331,6 +338,12 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
         move |key: SharedString, change: Change| {
             let Some(window) = weak.upgrade() else { return };
             let result = settings::update(&key, change);
+            // on -> off: the contents of the user's files must not stay in the db
+            if key == "docs" && matches!(&result, Ok(st) if !st.docs) {
+                if let Err(err) = crate::backend::apps::db_init::open_conn().and_then(|c| crate::backend::files::docs::clear(&c)) {
+                    eprintln!("failed to clear document index: {err}");
+                }
+            }
             if let Ok(st) = &result {
                 apply_settings(&window, st, &ctx);
                 window.invoke_refresh_view();
@@ -407,6 +420,13 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numbers_show_as_text_rows() {
+        let obj = serde_json::json!({"max_pdf_pages": 30});
+        let rows = fields(obj.as_object().unwrap());
+        assert_eq!((rows[0].kind, rows[0].text.as_str(), rows[0].heading.as_str()), (2, "30", "Documents"));
+    }
 
     #[test]
     fn fields_grouped_by_category_with_unknown_keys_last() {

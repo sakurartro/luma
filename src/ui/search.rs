@@ -4,7 +4,7 @@ use crate::backend::apps::fuzzy;
 use crate::backend::apps::watcher::APPS_CHANGED;
 use crate::backend::files::clip;
 use crate::backend::files::files_search;
-use crate::backend::files::ocr;
+use crate::backend::files::{docs, ocr};
 use crate::backend::general_features::engine;
 use crate::{AppItem, FileItem, MainWindow};
 use slint::{ComponentHandle, Model, VecModel};
@@ -13,10 +13,12 @@ use std::sync::atomic::Ordering;
 
 use super::Ctx;
 use super::apps::filter_items;
-use super::files::{build_file_item, extra_file_items, load_files_if_stale, set_files};
+use super::files::{build_file_item, doc_file_items, extra_file_items, load_files_if_stale, set_files};
 
 // Per-section cap for the unified (main view) search
 const MAX_MIXED: usize = 20;
+// Document hits get their own slots: name matches can fill all of MAX_MIXED
+const MAX_MIXED_DOCS: usize = 5;
 
 // Push file-index progress into the UI; called from the 30ms drain timer.
 pub fn update_index_progress(window: &MainWindow) {
@@ -37,7 +39,7 @@ pub fn update_index_progress(window: &MainWindow) {
     update_model_progress(window);
 }
 
-// Model download / photo indexing banner (clip, then ocr), same polling
+// Model download / photo / document indexing banner (clip, ocr, then docs), same polling
 // style as above.
 fn update_model_progress(window: &MainWindow) {
     let dl_total = clip::DL_TOTAL.load(Ordering::Relaxed);
@@ -48,6 +50,8 @@ fn update_model_progress(window: &MainWindow) {
     let ocr_dl_done = ocr::OCR_DL_DONE.load(Ordering::Relaxed);
     let ocr_total = ocr::OCR_TOTAL.load(Ordering::Relaxed);
     let ocr_done = ocr::OCR_DONE.load(Ordering::Relaxed);
+    let docs_total = docs::DOCS_TOTAL.load(Ordering::Relaxed);
+    let docs_done = docs::DOCS_DONE.load(Ordering::Relaxed);
     let (busy, label, percent) = if dl_total > 0 && dl_done < dl_total {
         (true, "Downloading models...", (dl_done.min(dl_total) * 100 / dl_total) as i32)
     } else if total > 0 && done < total {
@@ -56,6 +60,8 @@ fn update_model_progress(window: &MainWindow) {
         (true, "Downloading OCR models...", (ocr_dl_done.min(ocr_dl_total) * 100 / ocr_dl_total) as i32)
     } else if ocr_total > 0 && ocr_done < ocr_total {
         (true, "Recognizing text...", (ocr_done.min(ocr_total) * 100 / ocr_total) as i32)
+    } else if docs_total > 0 && docs_done < docs_total {
+        (true, "Indexing docs...", (docs_done.min(docs_total) * 100 / docs_total) as i32)
     } else {
         (false, "", 0)
     };
@@ -130,12 +136,15 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     let generation = clip::next_query();
                     window.set_searching(true);
                     std::thread::spawn(move || {
+                        // After the name matches, before the semantic guesses.
+                        let room = MAX_MIXED - base_len.min(MAX_MIXED);
+                        let doc_items = doc_file_items(query.as_str(), &fuzzy_paths, &hide_patterns, MAX_MIXED_DOCS);
                         let extra_items = extra_file_items(
                             query.as_str(),
                             generation,
                             &fuzzy_paths,
                             &hide_patterns,
-                            MAX_MIXED - base_len.min(MAX_MIXED),
+                            room,
                         );
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(window) = weak.upgrade() {
@@ -151,8 +160,14 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                                     && !clip::is_stale(generation)
                                 {
                                     // the shown fuzzy rows
+                                    // document hits go on top
                                     let mut all: Vec<FileItem> =
-                                        window.get_files().iter().take(base_len).collect();
+                                        doc_items.into_iter().map(|(f, snippet, score)| {
+                                            let mut item = build_file_item(&f, docs::MATCH_DOC, score);
+                                            item.snippet = snippet.into();
+                                            item
+                                        }).collect();
+                                    all.extend(window.get_files().iter().take(base_len));
                                     all.extend(extra_items.into_iter().map(|(f, kind, score)| {
                                         build_file_item(&f, kind, score)
                                     }));

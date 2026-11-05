@@ -1,5 +1,6 @@
 pub mod clip;
 pub mod db_service;
+pub mod docs;
 pub mod download;
 pub mod files_search;
 pub mod ocr;
