@@ -67,6 +67,10 @@ pub const MATCH_SEMANTIC: i32 = 1;
 const SEMANTIC_MIN_SCORE: f32 = 0.15;
 const SEMANTIC_MAX_SCORE: f32 = 0.35;
 const SEMANTIC_MAX_HITS: usize = 32;
+// Image -> image cosines run much higher than text -> image; 0.6 is a first
+// guess, calibrate on a real library.
+const SIMILAR_MIN_SCORE: f32 = 0.6;
+const SIMILAR_MAX_HITS: usize = 32;
 
 const KIND: &str = "clip";
 
@@ -96,9 +100,11 @@ const DB_CHUNK: usize = 16;
 // Cosine similarity -> UI percent: SEMANTIC_MIN_SCORE maps to 0,
 // SEMANTIC_MAX_SCORE to 100, values outside are clamped.
 fn match_percent(score: f32) -> i32 {
-    (((score - SEMANTIC_MIN_SCORE) / (SEMANTIC_MAX_SCORE - SEMANTIC_MIN_SCORE)) * 100.0)
-        .round()
-        .clamp(0.0, 100.0) as i32
+    percent(score, SEMANTIC_MIN_SCORE, SEMANTIC_MAX_SCORE)
+}
+
+fn percent(score: f32, min: f32, max: f32) -> i32 {
+    (((score - min) / (max - min)) * 100.0).round().clamp(0.0, 100.0) as i32
 }
 
 fn vec_to_blob(v: &[f32]) -> Vec<u8> {
@@ -179,16 +185,63 @@ pub fn clip_search(query: &str, generation: u64) -> Vec<(FileEntry, i32)> {
         }
     };
     l2_normalize(&mut query_vec);
+    rank(&query_vec, SEMANTIC_MIN_SCORE, SEMANTIC_MAX_HITS, match_percent)
+}
+
+/// Image -> image search: finds photos similar to `img` (e.g. from the
+/// clipboard). Loads the vision model for this one query under ONNX_LOCK and
+/// drops it afterwards. Empty without models/clip/ or when superseded.
+pub fn clip_similar(img: &image::DynamicImage, generation: u64) -> Vec<(FileEntry, i32)> {
+    if !clip_ready() {
+        return Vec::new();
+    }
+    let _onnx = ONNX_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if is_stale(generation) {
+        return Vec::new();
+    }
+    let Some(mut models) = ClipModels::load() else {
+        return Vec::new();
+    };
+    let embedded = models.embed_image(img);
+    drop(models);
+    // glibc holds the freed pages in its arenas; give them back to the OS.
+    unsafe { libc::malloc_trim(0) };
+    let mut query_vec = match embedded {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("clip image embed error: {err}");
+            return Vec::new();
+        }
+    };
+    l2_normalize(&mut query_vec);
+    rank(&query_vec, SIMILAR_MIN_SCORE, SIMILAR_MAX_HITS, |s| {
+        percent(s, SIMILAR_MIN_SCORE, 1.0)
+    })
+}
+
+// Scores the vector cache against a normalized query, best first, cut at
+// `min_score`/`max_hits`; `to_percent` maps cosine -> UI badge.
+fn rank(query_vec: &[f32], min_score: f32, max_hits: usize, to_percent: impl Fn(f32) -> i32) -> Vec<(FileEntry, i32)> {
     let vectors = VECTORS.lock().unwrap();
+    rank_in(&vectors, query_vec, min_score, max_hits, to_percent)
+}
+
+fn rank_in(
+    vectors: &[CachedVec],
+    query_vec: &[f32],
+    min_score: f32,
+    max_hits: usize,
+    to_percent: impl Fn(f32) -> i32,
+) -> Vec<(FileEntry, i32)> {
     let mut scored: Vec<(f32, &CachedVec)> =
-        vectors.iter().map(|c| (dot(&query_vec, &c.vec), c)).collect();
+        vectors.iter().map(|c| (dot(query_vec, &c.vec), c)).collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     scored
         .into_iter()
-        .filter(|(score, _)| *score >= SEMANTIC_MIN_SCORE)
+        .filter(|(score, _)| *score >= min_score)
         // The snapshot outlives files deleted/renamed since it was built.
         .filter(|(_, c)| std::path::Path::new(&c.path).exists())
-        .take(SEMANTIC_MAX_HITS)
+        .take(max_hits)
         .map(|(score, c)| {
             (
                 FileEntry {
@@ -198,8 +251,7 @@ pub fn clip_search(query: &str, generation: u64) -> Vec<(FileEntry, i32)> {
                     is_dir: false,
                     mtime: c.mtime,
                 },
-                // cutoff -> 0%, perfect match -> 100%
-                match_percent(score),
+                to_percent(score),
             )
         })
         .collect()
@@ -464,5 +516,21 @@ mod tests {
         // Same direction => score 1.0; orthogonal => ~0.0, below the threshold.
         assert!((dot(&q, &b) - 1.0).abs() < 1e-6);
         assert!(dot(&q, &a) < SEMANTIC_MIN_SCORE);
+    }
+
+    #[test]
+    fn similar_ranks_self_first_and_drops_orthogonal() {
+        let here = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+        let item = |vec: Vec<f32>| CachedVec {
+            path: here.into(),
+            name: "x".into(),
+            name_lower: vec!['x'],
+            mtime: 0,
+            vec,
+        };
+        let vectors = [item(vec![0.0, 1.0]), item(vec![1.0, 0.0])];
+        let hits = rank_in(&vectors, &[1.0, 0.0], SIMILAR_MIN_SCORE, 32, |s| percent(s, SIMILAR_MIN_SCORE, 1.0));
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, 100);
     }
 }

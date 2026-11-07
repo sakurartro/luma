@@ -154,8 +154,9 @@ codex mcp add luma -- luma mcp
 and set `"agent_api": true` in `~/.config/luma/settings.json` (no restart needed). The API
 is off by default.
 
-The server offers two tools: `luma_search_images` (what the picture shows, English
-queries) and `luma_search_text` (words written on it, English text). Each returns the
+The server offers three tools: `luma_search_images` (what the picture shows, English
+queries), `luma_search_text` (words written on it, English text) and
+`luma_find_similar_images` (photos that look like a given image file). Each returns the
 best matches with a 0–100 score.
 
 **Requirements** — Luma must be running, and `semantic` (for images) and/or `ocr` (for
@@ -163,7 +164,7 @@ text) must be on, with indexing done. Only folders in `search_dirs` are searched
 search not ready the tool answers with a message saying what to enable.
 
 **Without MCP** — `luma query clip "river in fog"` and `luma query ocr "connection refused"`
-print one JSON line. [`agent/skills/luma/SKILL.md`](agent/skills/luma/SKILL.md) is a skill
+print one JSON line; `luma query similar /path/to/photo.jpg` finds photos like that one. [`agent/skills/luma/SKILL.md`](agent/skills/luma/SKILL.md) is a skill
 that teaches an agent to use them.
 
 ## Privacy

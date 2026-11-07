@@ -26,6 +26,8 @@ evalexpr = "13"
 ort = "2.0.0-rc.14"
 ndarray = "0.17"
 image = "0.25"
+# буфер обмена: картинка для поиска похожих
+arboard = { version = "3.7", features = ["wayland-data-control"] }
 tokenizers = "0.21"
 # malloc_trim: вернуть ОС страницы, освобождённые дропом vision-сессии
 libc = "0.2"

@@ -17,6 +17,7 @@ const VERSION_KEY: &str = "io.modelcontextprotocol/protocolVersion";
 
 const TOOL_IMAGES: &str = "luma_search_images";
 const TOOL_TEXT: &str = "luma_search_text";
+const TOOL_SIMILAR: &str = "luma_find_similar_images";
 
 // Reaches the model with the server's name even when the tools themselves are
 // deferred (Claude Code shows only their names until it loads the schemas), so
@@ -71,11 +72,12 @@ fn handle(msg: &Value) -> Option<Value> {
             "instructions": INSTRUCTIONS,
         }),
         "ping" => json!({}),
-        "tools/list" => json!({"tools": [images_tool(), text_tool()]}),
+        "tools/list" => json!({"tools": [images_tool(), text_tool(), similar_tool()]}),
         "tools/call" => {
             let kind = match params["name"].as_str() {
                 Some(TOOL_IMAGES) => Kind::Clip,
                 Some(TOOL_TEXT) => Kind::Ocr,
+                Some(TOOL_SIMILAR) => Kind::Similar,
                 _ => {
                     let msg = format!("Unknown tool: {}", params["name"]);
                     return Some(error(id, -32602, &msg, None));
@@ -149,6 +151,21 @@ fn text_tool() -> Value {
             search_dirs of ~/.config/luma/settings.json are indexed. Needs \"agent_api\": true \
             and \"ocr\": true there.",
         "Words written on the image, as written (English)",
+    )
+}
+
+fn similar_tool() -> Value {
+    tool(
+        TOOL_SIMILAR,
+        "Find images similar to a given image",
+        "Find photos that look like a given image file (CLIP image-to-image), in under a \
+            second. Use it when the user has a picture and wants more like it, or the same \
+            scene or subject elsewhere (\"find photos similar to this one\"). The query is the \
+            path of the image file. Returns JSON [{\"path\", \"score\"}], best first, without \
+            the image itself; score 0-100 is relative within one answer. [] means nothing is \
+            similar enough. Only folders in search_dirs of ~/.config/luma/settings.json are \
+            indexed. Needs \"agent_api\": true and \"semantic\": true there.",
+        "Path of the image file to compare against",
     )
 }
 
@@ -242,7 +259,7 @@ mod tests {
 
         let list = request("tools/list", modern(json!({})));
         let names: Vec<_> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].clone()).collect();
-        assert_eq!(names, [TOOL_IMAGES, TOOL_TEXT]);
+        assert_eq!(names, [TOOL_IMAGES, TOOL_TEXT, TOOL_SIMILAR]);
         // Legacy answers stay as they were.
         assert!(request("tools/list", json!({}))["result"].get("resultType").is_none());
 
