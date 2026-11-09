@@ -395,16 +395,3 @@ mod tests {
         assert_eq!(at_time(3725.0), "at 1:02:05");
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn at_time_formats_minutes_and_hours() {
-        assert_eq!(at_time(0.4), "at 0:00");
-        assert_eq!(at_time(42.9), "at 0:42");
-        assert_eq!(at_time(605.0), "at 10:05");
-        assert_eq!(at_time(3725.0), "at 1:02:05");
-    }
-}
