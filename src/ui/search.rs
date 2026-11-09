@@ -39,13 +39,15 @@ pub fn update_index_progress(window: &MainWindow) {
     update_model_progress(window);
 }
 
-// Model download / photo / document indexing banner (clip, ocr, then docs), same polling
+// Model download / photo / video / document indexing banner (clip, ocr, then docs), same polling
 // style as above.
 fn update_model_progress(window: &MainWindow) {
     let dl_total = clip::DL_TOTAL.load(Ordering::Relaxed);
     let dl_done = clip::DL_DONE.load(Ordering::Relaxed);
     let total = clip::EMB_TOTAL.load(Ordering::Relaxed);
     let done = clip::EMB_DONE.load(Ordering::Relaxed);
+    let vid_total = clip::VID_TOTAL.load(Ordering::Relaxed);
+    let vid_done = clip::VID_DONE.load(Ordering::Relaxed);
     let ocr_dl_total = ocr::OCR_DL_TOTAL.load(Ordering::Relaxed);
     let ocr_dl_done = ocr::OCR_DL_DONE.load(Ordering::Relaxed);
     let ocr_total = ocr::OCR_TOTAL.load(Ordering::Relaxed);
@@ -56,6 +58,8 @@ fn update_model_progress(window: &MainWindow) {
         (true, "Downloading models...", (dl_done.min(dl_total) * 100 / dl_total) as i32)
     } else if total > 0 && done < total {
         (true, "Indexing photos...", (done.min(total) * 100 / total) as i32)
+    } else if vid_total > 0 && vid_done < vid_total {
+        (true, "Indexing videos...", (vid_done.min(vid_total) * 100 / vid_total) as i32)
     } else if ocr_dl_total > 0 && ocr_dl_done < ocr_dl_total {
         (true, "Downloading OCR models...", (ocr_dl_done.min(ocr_dl_total) * 100 / ocr_dl_total) as i32)
     } else if ocr_total > 0 && ocr_done < ocr_total {

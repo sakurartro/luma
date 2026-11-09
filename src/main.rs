@@ -173,7 +173,7 @@ fn main() -> Result<()> {
                 files_search::INDEX_DONE.store(true, Ordering::Relaxed);
                 start_files_watcher(&dirs, &st.exclude_dirs);
                 // Own thread; no-op when the `semantic` setting is off.
-                clip::start_indexing(st.semantic);
+                clip::start_indexing(&st);
                 // Waits for the clip worker, so keep it after the call above;
                 // no-op when the `ocr` setting is off.
                 ocr::start_indexing(st.ocr);

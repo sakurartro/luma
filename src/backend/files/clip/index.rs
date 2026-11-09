@@ -4,11 +4,14 @@
 use super::inference::{l2_normalize, models_dir, ClipModels, QueryModels};
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::files::download::ensure_models;
+use super::video;
 use crate::backend::files::files_search::{FileEntry, image_where, SCAN_COMPLETE};
+use crate::backend::files::video::frames::ffmpeg_available;
+use crate::backend::settings::Settings;
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 // Progress, same polling style as INDEX_* in files_search; no UI hook yet.
@@ -101,7 +104,7 @@ fn match_percent(score: f32) -> i32 {
         .clamp(0.0, 100.0) as i32
 }
 
-fn vec_to_blob(v: &[f32]) -> Vec<u8> {
+pub(super) fn vec_to_blob(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
@@ -261,14 +264,25 @@ impl Drop for SetDoneOnDrop {
     }
 }
 
+// (video_frame_every_sec, video_max_frames) when video frames get embedded:
+// `video` is on and ffmpeg was found. Set once by start_indexing.
+static VIDEO: OnceLock<(u32, u32)> = OnceLock::new();
+
 /// Start the indexing worker in the background; gated by the `semantic`
 /// setting (off = the feature costs nothing: no models, no RAM, no CPU).
 /// On first enable the models are downloaded from HuggingFace. Silently
 /// no-ops when the download fails or models/clip/ is broken.
-pub fn start_indexing(semantic: bool) {
-    if !semantic {
+pub fn start_indexing(st: &Settings) {
+    if !st.semantic {
         CLIP_DONE.store(true, Ordering::Release);
         return;
+    }
+    if st.video {
+        if ffmpeg_available() {
+            let _ = VIDEO.set((st.video_frame_every_sec, st.video_max_frames));
+        } else {
+            eprintln!("video search disabled: ffmpeg/ffprobe not found in PATH");
+        }
     }
     SEMANTIC_ON.store(true, Ordering::Relaxed);
     std::thread::spawn(|| index_pass(false));
@@ -281,7 +295,7 @@ static SEMANTIC_ON: AtomicBool = AtomicBool::new(false);
 static LAST_PHOTO_EVENT: Mutex<Option<Instant>> = Mutex::new(None);
 static REINDEX_PENDING: AtomicBool = AtomicBool::new(false);
 
-/// Called by the files watcher for a created/changed photo. After
+/// Called by the files watcher for a created/changed photo or video. After
 /// REINDEX_DELAY of quiet it runs one more indexing pass, which loads the
 /// models only if some photo lacks a fresh vector. No-op until the first
 /// pass has made the query models ready.
@@ -331,7 +345,8 @@ fn index_pass(rerun: bool) {
         image_where()
     );
     let total = conn.query_row(&total_sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
-    if rerun && total == 0 {
+    let videos = if VIDEO.get().is_some() { video::count_candidates(&conn).unwrap_or(0) } else { 0 };
+    if rerun && total == 0 && videos == 0 {
         return;
     }
     let Some(mut models) = ClipModels::load() else { return };
@@ -339,6 +354,9 @@ fn index_pass(rerun: bool) {
     if SCAN_COMPLETE.load(Ordering::Relaxed) {
         if let Err(err) = delete_orphans(&conn) {
             eprintln!("clip orphan cleanup error: {err}");
+        }
+        if let Err(err) = video::delete_orphans(&conn) {
+            eprintln!("video orphan cleanup error: {err}");
         }
     }
 
@@ -361,6 +379,9 @@ fn index_pass(rerun: bool) {
         after = chunk.last().unwrap().0.clone();
     }
     EMB_DONE.store(EMB_TOTAL.load(Ordering::Relaxed), Ordering::Relaxed);
+    if let Some(&(every_sec, max_frames)) = VIDEO.get() {
+        video::index_videos(&mut models, &mut conn, every_sec, max_frames);
+    }
     // Models + vector snapshot go live only now: a query during indexing
     // would score an incomplete cache. into_query() drops the vision
     // session here, releasing its ORT arena back to the OS.

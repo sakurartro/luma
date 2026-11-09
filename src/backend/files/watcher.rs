@@ -44,11 +44,15 @@ pub fn start_files_watcher(dirs: &[String], exclude: &[String]) {
                 mtime: mtime_of(path),
             };
             let is_photo = super::files_search::is_image(&entry.path);
+            let is_video = super::files_search::is_video(&entry.path);
             let is_doc = super::docs::is_doc(std::path::Path::new(&entry.path));
             let _ = insert_batch(&[entry], conn);
             if is_photo {
                 super::clip::schedule_reindex();
                 super::ocr::schedule_reindex();
+            }
+            if is_video {
+                super::clip::schedule_reindex();
             }
             if is_doc {
                 super::docs::schedule_reindex();

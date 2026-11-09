@@ -124,6 +124,12 @@ impl ClipModels {
         }
         out
     }
+
+    // Video frames, already turned into tensors by image_tensor; one row
+    // per tensor. Callers keep groups at INFERENCE_BATCH.
+    pub(crate) fn embed_tensors(&mut self, tensors: &[Array3<f32>]) -> Result<Vec<Vec<f32>>> {
+        run_images(&mut self.vision, tensors)
+    }
 }
 
 impl QueryModels {
@@ -149,6 +155,11 @@ fn preprocess_image(path: &Path) -> Result<Array3<f32>> {
     let img = reader
         .decode()
         .with_context(|| format!("decode {}", path.display()))?;
+    Ok(image_tensor(&img))
+}
+
+/// Decoded image -> [3,224,224] f32 (RGB, CLIP normalization).
+pub(crate) fn image_tensor(img: &image::DynamicImage) -> Array3<f32> {
     let resized = image::imageops::resize(
         &img.to_rgb8(),
         IMAGE_SIZE as u32,
@@ -161,7 +172,7 @@ fn preprocess_image(path: &Path) -> Result<Array3<f32>> {
             out[[c, y as usize, x as usize]] = (px[c] as f32 / 255.0 - MEAN[c]) / STD[c];
         }
     }
-    Ok(out)
+    out
 }
 
 /// Текст -> input_ids [1,77] (BOS, токены, EOS, паддинг нулями).
