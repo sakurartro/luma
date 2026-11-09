@@ -172,8 +172,10 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                                             item
                                         }).collect();
                                     all.extend(window.get_files().iter().take(base_len));
-                                    all.extend(extra_items.into_iter().map(|(f, kind, score)| {
-                                        build_file_item(&f, kind, score)
+                                    all.extend(extra_items.into_iter().map(|(f, kind, score, snippet)| {
+                                        let mut item = build_file_item(&f, kind, score);
+                                        item.snippet = snippet.into();
+                                        item
                                     }));
                                     set_files(&window, all);
                                     window.set_searching(false);

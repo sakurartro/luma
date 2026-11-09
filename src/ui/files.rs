@@ -152,8 +152,9 @@ pub(super) fn set_files(window: &MainWindow, items: Vec<FileItem>) {
 // Files found by the text on them (OCR) and by meaning (CLIP), in that order:
 // text on the image is the stronger signal. Paths already shown by the fuzzy
 // name search, hidden names and repeats between the two are skipped.
-// Runs on worker threads, so it returns (entry, match kind, score) and the UI
-// thread builds the FileItems (slint::Image in them isn't Send).
+// Runs on worker threads, so it returns (entry, match kind, score, snippet)
+// and the UI thread builds the FileItems (slint::Image in them isn't Send).
+// The snippet is "at 0:42" for a video hit, "" otherwise.
 // generation: clip::next_query() taken on the UI thread for this keystroke.
 pub(super) fn extra_file_items(
     query: &str,
@@ -161,21 +162,28 @@ pub(super) fn extra_file_items(
     shown: &std::collections::HashSet<String>,
     hide_patterns: &[String],
     limit: usize,
-) -> Vec<(FileEntry, i32, i32)> {
-    let ocr_hits = ocr::ocr_search(query).into_iter().map(|(f, score)| (f, ocr::MATCH_OCR, score));
+) -> Vec<(FileEntry, i32, i32, String)> {
+    let ocr_hits = ocr::ocr_search(query).into_iter().map(|(f, score)| (f, ocr::MATCH_OCR, score, String::new()));
     let clip_hits = clip::clip_search(query, generation)
         .into_iter()
-        .map(|(f, score)| (f, clip::MATCH_SEMANTIC, score));
+        .map(|(f, score, t_sec)| (f, clip::MATCH_SEMANTIC, score, t_sec.map(at_time).unwrap_or_default()));
     let mut taken = std::collections::HashSet::new();
     ocr_hits
         .chain(clip_hits)
-        .filter(|(f, _, _)| {
+        .filter(|(f, _, _, _)| {
             !shown.contains(f.path.as_str())
                 && !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str()))
                 && taken.insert(f.path.clone())
         })
         .take(limit)
         .collect()
+}
+
+// "at 0:42" / "at 1:02:05": where in the video the hit is.
+fn at_time(t_sec: f64) -> String {
+    let s = t_sec as u64;
+    let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
+    if h > 0 { format!("at {h}:{m:02}:{s:02}") } else { format!("at {m}:{s:02}") }
 }
 
 // Files with the query inside their text (document index), best first, each
@@ -346,8 +354,10 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                                         .map(|(f, _, score)| build_file_item(&f, docs::MATCH_DOC, score))
                                         .collect();
                                     all.extend(window.get_files().iter().take(base_len));
-                                    all.extend(extra_items.into_iter().map(|(f, kind, score)| {
-                                        build_file_item(&f, kind, score)
+                                    all.extend(extra_items.into_iter().map(|(f, kind, score, snippet)| {
+                                        let mut item = build_file_item(&f, kind, score);
+                                        item.snippet = snippet.into();
+                                        item
                                     }));
                                     set_files(&window, all);
                                 }
@@ -371,4 +381,30 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
             eprintln!("Failed to open {}, {err}", file.path);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn at_time_formats_minutes_and_hours() {
+        assert_eq!(at_time(0.4), "at 0:00");
+        assert_eq!(at_time(42.9), "at 0:42");
+        assert_eq!(at_time(605.0), "at 10:05");
+        assert_eq!(at_time(3725.0), "at 1:02:05");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn at_time_formats_minutes_and_hours() {
+        assert_eq!(at_time(0.4), "at 0:00");
+        assert_eq!(at_time(42.9), "at 0:42");
+        assert_eq!(at_time(605.0), "at 10:05");
+        assert_eq!(at_time(3725.0), "at 1:02:05");
+    }
 }

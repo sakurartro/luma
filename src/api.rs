@@ -57,7 +57,11 @@ fn search_response(kind: Kind, query: &str, settings: &settings::Settings) -> St
         Kind::Clip if !clip::clip_ready() => {
             return error("semantic search is not available: enable \"semantic\" in settings.json or wait for indexing to finish");
         }
-        Kind::Clip => clip::clip_search(query, clip::NEVER_STALE),
+        // photos only: videos get their own tool
+        Kind::Clip => clip::clip_search(query, clip::NEVER_STALE)
+            .into_iter()
+            .filter_map(|(f, score, t_sec)| t_sec.is_none().then_some((f, score)))
+            .collect(),
         // same for ocr_search before the first snapshot is loaded
         Kind::Ocr if !ocr::ocr_ready() => {
             return error("text search is not available: enable \"ocr\" in settings.json or wait for indexing to finish");
