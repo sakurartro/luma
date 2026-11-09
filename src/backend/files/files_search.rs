@@ -26,16 +26,37 @@ pub static SCAN_COMPLETE: AtomicBool = AtomicBool::new(false);
 // image icon.
 const IMAGE_EXTS: [&str; 6] = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
 
-// SQL predicate for image files in `files f`; LIKE is ASCII case-insensitive.
-pub fn image_where() -> String {
-    let likes: Vec<String> = IMAGE_EXTS.iter().map(|ext| format!("f.path LIKE '%.{ext}'")).collect();
+// Video extensions: the video indexing workers (video_where, is_video) filter
+// by this list; file_kind maps it to the video icon.
+const VIDEO_EXTS: [&str; 5] = ["mp4", "mkv", "webm", "avi", "mov"];
+
+// SQL predicate for files in `files f` with one of `exts`; LIKE is ASCII
+// case-insensitive.
+fn exts_where(exts: &[&str]) -> String {
+    let likes: Vec<String> = exts.iter().map(|ext| format!("f.path LIKE '%.{ext}'")).collect();
     format!("({})", likes.join(" OR "))
 }
 
-// Same rule as image_where, case-insensitive like LIKE.
-pub fn is_image(path: &str) -> bool {
+// Same rule as exts_where, case-insensitive like LIKE.
+fn has_ext(path: &str, exts: &[&str]) -> bool {
     path.rsplit_once('.')
-        .is_some_and(|(_, ext)| IMAGE_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
+        .is_some_and(|(_, ext)| exts.iter().any(|e| ext.eq_ignore_ascii_case(e)))
+}
+
+pub fn image_where() -> String {
+    exts_where(&IMAGE_EXTS)
+}
+
+pub fn is_image(path: &str) -> bool {
+    has_ext(path, &IMAGE_EXTS)
+}
+
+pub fn video_where() -> String {
+    exts_where(&VIDEO_EXTS)
+}
+
+pub fn is_video(path: &str) -> bool {
+    has_ext(path, &VIDEO_EXTS)
 }
 
 // FileItem.kind, picks the icon in app-window.slint: 1 document, 2 spreadsheet,
@@ -49,7 +70,7 @@ pub fn file_kind(path: &str, is_dir: bool) -> i32 {
         &["zip", "tar", "gz", "tgz", "xz", "zst", "bz2", "7z", "rar"],
         &["rs", "py", "js", "ts", "c", "h", "cpp", "go", "java", "sh", "json", "toml", "yaml", "yml", "html", "css"],
         &["mp3", "flac", "wav", "ogg", "opus", "m4a"],
-        &["mp4", "mkv", "webm", "avi", "mov"],
+        &VIDEO_EXTS,
         &IMAGE_EXTS,
     ];
     let Some((_, ext)) = path.rsplit_once('.').filter(|_| !is_dir) else { return 0 };
@@ -230,6 +251,23 @@ mod tests {
         assert!(!is_image("/p/a.txt"));
         assert!(!is_image("/p/a.jpeg.txt"));
         assert!(!is_image("/p.png/a"));
+    }
+
+    #[test]
+    fn is_video_by_extension() {
+        assert!(is_video("/p/a.MP4"));
+        assert!(is_video("/p/a.mkv"));
+        assert!(!is_video("/p/a.png"));
+        assert!(!is_video("/p/a.mov.txt"));
+        assert!(!is_video("/p.webm/a"));
+        assert_eq!(file_kind("/p/a.Mov", false), 7);
+    }
+
+    #[test]
+    fn video_where_lists_every_ext() {
+        let sql = video_where();
+        assert!(VIDEO_EXTS.iter().all(|e| sql.contains(&format!("'%.{e}'"))));
+        assert!(!sql.contains("png"));
     }
 
     #[test]
