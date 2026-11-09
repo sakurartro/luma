@@ -1,5 +1,7 @@
 // Search inside videos: frames (CLIP, OCR) in video_meta + video_frames.
 
+pub mod frames;
+
 use rusqlite::Connection;
 
 /// Drops everything indexed from videos (the `video` setting went off).
