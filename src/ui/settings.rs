@@ -349,6 +349,11 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     eprintln!("failed to clear document index: {err}");
                 }
             }
+            if key == "video" && matches!(&result, Ok(st) if !st.video) {
+                if let Err(err) = crate::backend::apps::db_init::open_conn().and_then(|c| crate::backend::files::video::clear(&c)) {
+                    eprintln!("failed to clear video index: {err}");
+                }
+            }
             if let Ok(st) = &result {
                 apply_settings(&window, st, &ctx);
                 window.invoke_refresh_view();

@@ -66,6 +66,8 @@ pub fn del_entry(conn: &Connection, path: String) -> Result<()> {
     conn.execute("DELETE FROM folders WHERE path = ?1", [&path])?;
     conn.execute("DELETE FROM doc_meta WHERE file_path = ?1", [&path])?;
     conn.execute("DELETE FROM doc_fts WHERE file_path = ?1", [&path])?;
+    conn.execute("DELETE FROM video_meta WHERE file_path = ?1", [&path])?;
+    conn.execute("DELETE FROM video_frames WHERE file_path = ?1", [&path])?;
     Ok(())
 }
 
@@ -82,6 +84,8 @@ mod tests {
             CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, mtime INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE doc_meta (file_path TEXT PRIMARY KEY, mtime INTEGER NOT NULL);
             CREATE VIRTUAL TABLE doc_fts USING fts5(file_path UNINDEXED, body, tokenize = 'porter unicode61 remove_diacritics 2');
+            CREATE TABLE video_meta (file_path TEXT NOT NULL, kind TEXT NOT NULL, mtime INTEGER NOT NULL, PRIMARY KEY (file_path, kind));
+            CREATE TABLE video_frames (file_path TEXT NOT NULL, t_sec REAL NOT NULL, vec BLOB, ocr TEXT, PRIMARY KEY (file_path, t_sec));
             "#,
         )
         .unwrap();
@@ -131,5 +135,22 @@ mod tests {
         assert_eq!(hits(&conn), 1);
         let meta: i64 = conn.query_row("SELECT COUNT(*) FROM doc_meta", [], |r| r.get(0)).unwrap();
         assert_eq!(meta, 1);
+    }
+
+    #[test]
+    fn del_entry_drops_video_index() {
+        let conn = conn();
+        conn.execute_batch(
+            "INSERT INTO video_meta VALUES ('/v/a.mp4', 'clip', 1), ('/v/a.mp4', 'ocr', 1), ('/v/b.mp4', 'clip', 1);
+             INSERT INTO video_frames VALUES ('/v/a.mp4', 5.0, x'00', 'hi'), ('/v/a.mp4', 15.0, NULL, NULL), ('/v/b.mp4', 5.0, x'00', NULL);",
+        )
+        .unwrap();
+        del_entry(&conn, "/v/a.mp4".into()).unwrap();
+        let left = |t: &str| -> Vec<String> {
+            let mut stmt = conn.prepare(&format!("SELECT DISTINCT file_path FROM {t}")).unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        assert_eq!(left("video_meta"), ["/v/b.mp4"]);
+        assert_eq!(left("video_frames"), ["/v/b.mp4"]);
     }
 }

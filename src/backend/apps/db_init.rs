@@ -123,6 +123,25 @@ impl DbState {
                 body,
                 tokenize = 'porter unicode61 remove_diacritics 2'
             );
+
+            -- Video search. video_meta answers "has this source (kind =
+            -- 'clip' | 'ocr') processed the video at this mtime"; video_frames
+            -- holds one row per sampled frame: vec from the clip worker, ocr
+            -- from the ocr worker, either may be NULL. No FK, same reason as
+            -- ocr_text.
+            CREATE TABLE IF NOT EXISTS video_meta (
+                file_path TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                mtime INTEGER NOT NULL,
+                PRIMARY KEY (file_path, kind)
+            );
+            CREATE TABLE IF NOT EXISTS video_frames (
+                file_path TEXT NOT NULL,
+                t_sec REAL NOT NULL,
+                vec BLOB,
+                ocr TEXT,
+                PRIMARY KEY (file_path, t_sec)
+            );
             "#,
         )?;
 

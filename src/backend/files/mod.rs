@@ -5,6 +5,7 @@ pub mod download;
 pub mod files_search;
 pub mod ocr;
 pub mod thumbs;
+pub mod video;
 pub mod watcher;
 
 // ort allows one Environment per process; clip and ocr share it.
