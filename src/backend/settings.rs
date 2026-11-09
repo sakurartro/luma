@@ -45,6 +45,16 @@ pub struct Settings {
     pub docs_max_text_kb: usize,
     #[serde(default = "default_max_pdf_pages")]
     pub docs_max_pdf_pages: u32,
+    // Search inside videos by their frames (CLIP when `semantic`, later OCR);
+    // off by default, needs ffmpeg in PATH.
+    #[serde(default)]
+    pub video: bool,
+    // One frame every video_frame_every_sec seconds, at most video_max_frames
+    // per video. Apply after a restart.
+    #[serde(default = "default_video_frame_every_sec")]
+    pub video_frame_every_sec: u32,
+    #[serde(default = "default_video_max_frames")]
+    pub video_max_frames: u32,
     // Local API for AI agents (`luma query`, MCP); off by default.
     #[serde(default)]
     pub agent_api: bool,
@@ -64,6 +74,14 @@ fn default_max_text_kb() -> usize {
 
 fn default_max_pdf_pages() -> u32 {
     30
+}
+
+fn default_video_frame_every_sec() -> u32 {
+    10
+}
+
+fn default_video_max_frames() -> u32 {
+    32
 }
 
 fn default_currency() -> bool {
@@ -102,6 +120,9 @@ impl Default for Settings {
             docs_max_file_mb: default_max_file_mb(),
             docs_max_text_kb: default_max_text_kb(),
             docs_max_pdf_pages: default_max_pdf_pages(),
+            video: false,
+            video_frame_every_sec: default_video_frame_every_sec(),
+            video_max_frames: default_video_max_frames(),
             agent_api: false,
             currency: default_currency(),
         }
@@ -344,6 +365,14 @@ mod tests {
         assert!(json.contains(r#""docs_max_file_mb":10"#));
         assert!(json.contains(r#""docs_max_text_kb":256"#));
         assert!(json.contains(r#""docs_max_pdf_pages":30"#));
+    }
+
+    #[test]
+    fn template_includes_video_off_and_limits() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains(r#""video":false"#));
+        assert!(json.contains(r#""video_frame_every_sec":10"#));
+        assert!(json.contains(r#""video_max_frames":32"#));
     }
 
     #[test]
