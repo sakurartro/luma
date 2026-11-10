@@ -14,7 +14,7 @@ pub struct DocHit {
 // User text → FTS5 query: every word quoted (so `-`, `"`, AND, NEAR... are
 // plain text, not syntax) and all of them required; the last one is a
 // prefix, so results follow the typing. None when there are no words.
-fn fts_query(text: &str) -> Option<String> {
+pub(crate) fn fts_query(text: &str) -> Option<String> {
     let words: Vec<&str> = text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
     let last = words.len().checked_sub(1)?;
     let parts: Vec<String> = words

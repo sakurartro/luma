@@ -5,6 +5,7 @@ use crate::backend::files::{clip, docs};
 use crate::backend::files::db_service as files_db;
 use crate::backend::files::files_search::{self, FileEntry};
 use crate::backend::files::ocr;
+use crate::backend::files::video::{speech_index, speech_search::speech_search};
 use crate::{FileItem, MainWindow};
 use slint::{ComponentHandle, Model, VecModel};
 use std::cell::{Cell, RefCell};
@@ -188,30 +189,45 @@ fn at_time(t_sec: f64) -> String {
     if h > 0 { format!("at {h}:{m:02}:{s:02}") } else { format!("at {m}:{s:02}") }
 }
 
-// Files with the query inside their text (document index), best first, each
-// with a snippet. Same filters as extra_file_items; runs on a worker thread.
+// Files with the query inside their text (document index) and videos with
+// it in their speech, best first, each with a snippet (speech: "at 0:42 · ...").
+// Same filters as extra_file_items; runs on a worker thread.
 pub(super) fn doc_file_items(
     query: &str,
     shown: &std::collections::HashSet<String>,
     hide_patterns: &[String],
     limit: usize,
 ) -> Vec<(FileEntry, String, i32)> {
-    if limit == 0 || !docs::docs_enabled() {
+    let (docs_on, speech_on) = (docs::docs_enabled(), speech_index::speech_enabled());
+    if limit == 0 || !(docs_on || speech_on) {
         return Vec::new();
     }
+    let conn = match open_conn() {
+        Ok(conn) => conn,
+        Err(err) => {
+            eprintln!("text search error: {err}");
+            return Vec::new();
+        }
+    };
     // asks for more than `limit`: some hits are dropped below
-    let hits = open_conn()
-        .and_then(|conn| docs::docs_search(&conn, query, limit + 50))
-        .unwrap_or_else(|err| {
-            eprintln!("docs search error: {err}");
-            Vec::new()
-        });
-    hits.into_iter()
-        .filter(|hit| !shown.contains(hit.path.as_str()))
-        .map(|hit| {
-            let name = Path::new(&hit.path).file_name().unwrap_or_default().to_string_lossy().into_owned();
-            let entry = FileEntry { name_lower: Vec::new(), name, path: hit.path, is_dir: false, mtime: 0 };
-            (entry, hit.snippet, hit.score)
+    let docs_hits = if docs_on { docs::docs_search(&conn, query, limit + 50) } else { Ok(Vec::new()) }.unwrap_or_else(|err| {
+        eprintln!("docs search error: {err}");
+        Vec::new()
+    });
+    let speech_hits = if speech_on { speech_search(&conn, query, limit + 50) } else { Ok(Vec::new()) }.unwrap_or_else(|err| {
+        eprintln!("speech search error: {err}");
+        Vec::new()
+    });
+    docs_hits
+        .into_iter()
+        .map(|hit| (hit.path, hit.snippet, hit.score))
+        // documents first, then videos found by what is said in them
+        .chain(speech_hits.into_iter().map(|hit| (hit.path, format!("{} · {}", at_time(hit.t_sec), hit.snippet), hit.score)))
+        .filter(|(path, _, _)| !shown.contains(path.as_str()))
+        .map(|(path, snippet, score)| {
+            let name = Path::new(&path).file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let entry = FileEntry { name_lower: Vec::new(), name, path, is_dir: false, mtime: 0 };
+            (entry, snippet, score)
         })
         .filter(|(f, _, _)| !hide_patterns.iter().any(|p| f.name.starts_with(p.as_str())))
         .take(limit)

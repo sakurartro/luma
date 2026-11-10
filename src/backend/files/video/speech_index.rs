@@ -94,6 +94,11 @@ pub fn start_indexing(st: &Settings) {
     std::thread::spawn(|| index_pass(false));
 }
 
+/// Whether the `video_speech` setting was on at startup: speech hits are searched.
+pub fn speech_enabled() -> bool {
+    SPEECH_ON.load(Ordering::Relaxed)
+}
+
 // Same debounce as ocr::schedule_reindex: one pass per burst of new videos.
 const REINDEX_DELAY: Duration = Duration::from_secs(10);
 static SPEECH_ON: AtomicBool = AtomicBool::new(false);
