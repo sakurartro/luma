@@ -3,7 +3,12 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      speech:
+        description: Also run the speech model on real speech (downloads ~66 MB)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,7 +31,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build g++ pkg-config \
-            libnuma-dev libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libxcb1-dev
+            libnuma-dev libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libxcb1-dev ffmpeg
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -40,6 +45,14 @@ jobs:
       # #[ignore] tests need downloaded ML models and stay skipped.
       - name: Test
         run: cargo test --locked
+
+      # Manual runs only (`gh workflow run ci.yml -f speech=true`).
+      - name: Speech model on real speech
+        if: ${{ inputs.speech }}
+        run: |
+          sudo apt-get install -y espeak-ng
+          espeak-ng -w /tmp/speech.wav "The quick brown fox jumps over the lazy dog"
+          SPEECH_AUDIO=/tmp/speech.wav cargo test --locked speech_live -- --ignored --nocapture
 
       # TODO: add `-- -D warnings` once fix/build-warnings is merged.
       - name: Clippy

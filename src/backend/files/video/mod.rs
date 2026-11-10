@@ -2,6 +2,7 @@
 
 pub mod frames;
 pub mod speech;
+pub mod vad;
 
 use crate::backend::files::files_search::video_where;
 use anyhow::Result;
