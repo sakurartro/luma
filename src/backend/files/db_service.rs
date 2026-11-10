@@ -68,6 +68,7 @@ pub fn del_entry(conn: &Connection, path: String) -> Result<()> {
     conn.execute("DELETE FROM doc_fts WHERE file_path = ?1", [&path])?;
     conn.execute("DELETE FROM video_meta WHERE file_path = ?1", [&path])?;
     conn.execute("DELETE FROM video_frames WHERE file_path = ?1", [&path])?;
+    conn.execute("DELETE FROM speech_fts WHERE file_path = ?1", [&path])?;
     Ok(())
 }
 
@@ -86,6 +87,7 @@ mod tests {
             CREATE VIRTUAL TABLE doc_fts USING fts5(file_path UNINDEXED, body, tokenize = 'porter unicode61 remove_diacritics 2');
             CREATE TABLE video_meta (file_path TEXT NOT NULL, kind TEXT NOT NULL, mtime INTEGER NOT NULL, PRIMARY KEY (file_path, kind));
             CREATE TABLE video_frames (file_path TEXT NOT NULL, t_sec REAL NOT NULL, vec BLOB, ocr TEXT, PRIMARY KEY (file_path, t_sec));
+            CREATE VIRTUAL TABLE speech_fts USING fts5(file_path UNINDEXED, t_sec UNINDEXED, body, tokenize = 'porter unicode61 remove_diacritics 2');
             "#,
         )
         .unwrap();
@@ -142,6 +144,7 @@ mod tests {
         let conn = conn();
         conn.execute_batch(
             "INSERT INTO video_meta VALUES ('/v/a.mp4', 'clip', 1), ('/v/a.mp4', 'ocr', 1), ('/v/b.mp4', 'clip', 1);
+             INSERT INTO speech_fts VALUES ('/v/a.mp4', 5.0, 'hello'), ('/v/b.mp4', 5.0, 'world');
              INSERT INTO video_frames VALUES ('/v/a.mp4', 5.0, x'00', 'hi'), ('/v/a.mp4', 15.0, NULL, NULL), ('/v/b.mp4', 5.0, x'00', NULL);",
         )
         .unwrap();
@@ -152,5 +155,6 @@ mod tests {
         };
         assert_eq!(left("video_meta"), ["/v/b.mp4"]);
         assert_eq!(left("video_frames"), ["/v/b.mp4"]);
+        assert_eq!(left("speech_fts"), ["/v/b.mp4"]);
     }
 }

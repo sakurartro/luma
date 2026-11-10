@@ -354,6 +354,11 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     eprintln!("failed to clear video index: {err}");
                 }
             }
+            if key == "video_speech" && matches!(&result, Ok(st) if !st.video_speech) {
+                if let Err(err) = crate::backend::apps::db_init::open_conn().and_then(|c| crate::backend::files::video::clear_speech(&c)) {
+                    eprintln!("failed to clear speech index: {err}");
+                }
+            }
             if let Ok(st) = &result {
                 apply_settings(&window, st, &ctx);
                 window.invoke_refresh_view();

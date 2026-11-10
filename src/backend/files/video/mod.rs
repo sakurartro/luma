@@ -8,7 +8,12 @@ use rusqlite::{params, Connection};
 
 /// Drops everything indexed from videos (the `video` setting went off).
 pub fn clear(conn: &Connection) -> anyhow::Result<()> {
-    Ok(conn.execute_batch("DELETE FROM video_meta; DELETE FROM video_frames;")?)
+    Ok(conn.execute_batch("DELETE FROM video_meta; DELETE FROM video_frames; DELETE FROM speech_fts;")?)
+}
+
+/// Drops only the recognized speech (the `video_speech` setting went off).
+pub fn clear_speech(conn: &Connection) -> anyhow::Result<()> {
+    Ok(conn.execute_batch("DELETE FROM speech_fts; DELETE FROM video_meta WHERE kind = 'speech';")?)
 }
 
 // Videos not processed by `kind` ('clip' | 'ocr') at their current mtime.
@@ -40,7 +45,8 @@ pub fn fetch_stale(conn: &Connection, kind: &str, after: &str, limit: i64) -> Re
 pub fn delete_orphans(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "DELETE FROM video_meta WHERE file_path NOT IN (SELECT path FROM files);
-         DELETE FROM video_frames WHERE file_path NOT IN (SELECT path FROM files);",
+         DELETE FROM video_frames WHERE file_path NOT IN (SELECT path FROM files);
+         DELETE FROM speech_fts WHERE file_path NOT IN (SELECT path FROM files);",
     )?;
     Ok(())
 }
@@ -54,7 +60,8 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE files (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, mtime INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE video_meta (file_path TEXT NOT NULL, kind TEXT NOT NULL, mtime INTEGER NOT NULL, PRIMARY KEY (file_path, kind));
-             CREATE TABLE video_frames (file_path TEXT NOT NULL, t_sec REAL NOT NULL, vec BLOB, ocr TEXT, PRIMARY KEY (file_path, t_sec));",
+             CREATE TABLE video_frames (file_path TEXT NOT NULL, t_sec REAL NOT NULL, vec BLOB, ocr TEXT, PRIMARY KEY (file_path, t_sec));
+             CREATE VIRTUAL TABLE speech_fts USING fts5(file_path UNINDEXED, t_sec UNINDEXED, body, tokenize = 'porter unicode61 remove_diacritics 2');",
         )
         .unwrap();
         conn
@@ -91,26 +98,51 @@ mod tests {
         conn.execute("INSERT INTO files (name, path, mtime) VALUES ('a', '/v/a.mp4', 1)", []).unwrap();
         conn.execute_batch(
             "INSERT INTO video_meta VALUES ('/v/a.mp4', 'clip', 1), ('/gone.mp4', 'clip', 1), ('/gone.mp4', 'ocr', 1);
-             INSERT INTO video_frames VALUES ('/v/a.mp4', 1.0, x'00', NULL), ('/gone.mp4', 1.0, x'00', 'x');",
+             INSERT INTO video_frames VALUES ('/v/a.mp4', 1.0, x'00', NULL), ('/gone.mp4', 1.0, x'00', 'x');
+             INSERT INTO speech_fts VALUES ('/v/a.mp4', 1.0, 'kept'), ('/gone.mp4', 1.0, 'dropped');",
         )
         .unwrap();
         delete_orphans(&conn).unwrap();
         let count = |t: &str| -> i64 { conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap() };
-        assert_eq!((count("video_meta"), count("video_frames")), (1, 1));
+        assert_eq!((count("video_meta"), count("video_frames"), count("speech_fts")), (1, 1, 1));
     }
 
     #[test]
-    fn clear_empties_both_tables() {
+    fn clear_empties_all_tables() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE video_meta (file_path TEXT NOT NULL, kind TEXT NOT NULL, mtime INTEGER NOT NULL, PRIMARY KEY (file_path, kind));
              CREATE TABLE video_frames (file_path TEXT NOT NULL, t_sec REAL NOT NULL, vec BLOB, ocr TEXT, PRIMARY KEY (file_path, t_sec));
+             CREATE VIRTUAL TABLE speech_fts USING fts5(file_path UNINDEXED, t_sec UNINDEXED, body, tokenize = 'porter unicode61 remove_diacritics 2');
              INSERT INTO video_meta VALUES ('/v/a.mp4', 'clip', 1);
-             INSERT INTO video_frames VALUES ('/v/a.mp4', 5.0, x'00', NULL);",
+             INSERT INTO video_frames VALUES ('/v/a.mp4', 5.0, x'00', NULL);
+             INSERT INTO speech_fts VALUES ('/v/a.mp4', 5.0, 'hi');",
         )
         .unwrap();
         clear(&conn).unwrap();
         let count = |t: &str| -> i64 { conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap() };
-        assert_eq!((count("video_meta"), count("video_frames")), (0, 0));
+        assert_eq!((count("video_meta"), count("video_frames"), count("speech_fts")), (0, 0, 0));
+    }
+
+    #[test]
+    fn speech_roundtrip_insert_search_clear() {
+        let conn = conn();
+        conn.execute_batch(
+            "INSERT INTO video_meta VALUES ('/v/a.mp4', 'clip', 1), ('/v/a.mp4', 'speech', 1);
+             INSERT INTO video_frames VALUES ('/v/a.mp4', 5.0, x'00', NULL);
+             INSERT INTO speech_fts VALUES ('/v/a.mp4', 12.5, 'we signed the leasing contract');",
+        )
+        .unwrap();
+        // porter stemming: "lease" matches "leasing"
+        let hit: (String, f64) = conn
+            .query_row("SELECT file_path, t_sec FROM speech_fts WHERE speech_fts MATCH 'lease'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(hit, ("/v/a.mp4".into(), 12.5));
+        clear_speech(&conn).unwrap();
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT COUNT(*) FROM speech_fts"), 0);
+        // frames and the other sources' meta stay
+        assert_eq!(count("SELECT COUNT(*) FROM video_meta"), 1);
+        assert_eq!(count("SELECT COUNT(*) FROM video_frames"), 1);
     }
 }
