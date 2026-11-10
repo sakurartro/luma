@@ -1,6 +1,6 @@
 ---
 name: luma
-description: Find photos and images on this computer by what is in them (e.g. "the photo of a river in fog", "a picture of my cat on the windowsill") or by the text written on them (e.g. "the screenshot with connection refused") using the running Luma launcher's semantic (CLIP) and OCR indexes. Use instead of find/grep/ls when the user asks to find an image, photo, picture or screenshot by its content or its text.
+description: Find photos and images on this computer by what is in them (e.g. "the photo of a river in fog", "a picture of my cat on the windowsill") or by the text written on them (e.g. "the screenshot with connection refused"), or find a video and the moment in it (what is shown, written or said) using the running Luma launcher's semantic (CLIP) and OCR indexes. Use instead of find/grep/ls when the user asks to find an image, photo, picture or screenshot by its content or its text.
 ---
 
 # Luma: search images by meaning
@@ -53,6 +53,33 @@ luma query ocr --limit 10 "invoice 2024"
 - `[]` means no image has that text: try other words from the same text, or
   search by content with `luma query clip`.
 
+## Search videos
+
+For a video and the moment in it: what is on screen, text on screen, or what
+is said.
+
+```bash
+luma query video "the lease ends in may"
+luma query video --limit 10 "whiteboard with a diagram"
+```
+
+- Searches three ways at once: a frame by what it **shows** (describe it in
+  English), text on a frame (English words as written) and the **speech**
+  (English only, plain words).
+- Output is one JSON line, best first:
+
+```json
+[{"path":"/home/user/Videos/call.mp4","source":"speech","t_sec":42.5,"score":100,"snippet":"we signed the leasing contract"}]
+```
+
+- `source` is `frame`, `ocr` or `speech`; `t_sec` is the second in the video
+  where the match is (tell the user `m:ss`); `snippet` (speech only) is the
+  words around the match. A video appears once per source. Scores are
+  relative within one source.
+- Needs `"video": true` plus `"semantic"`, `"ocr"` and/or `"video_speech"`
+  for the matching source, and `ffmpeg` installed. A few frames per video are
+  indexed, and speech only for videos up to `video_speech_max_min` minutes.
+
 Which one: what the picture **shows** → `clip`; what is **written** on it → `ocr`.
 If one finds nothing, try the other.
 
@@ -86,6 +113,8 @@ edit their settings or start Luma without asking.
 | `Luma is not running` | Start the Luma launcher (`luma`), then retry. |
 | `semantic search is not available: ...` | Either `"semantic": true` is not set in `~/.config/luma/settings.json` (set it, restart Luma; it downloads ~154 MB of models and indexes photos in the background), or indexing is still running — wait and retry. |
 | `text search is not available: ...` | Either `"ocr": true` is not set in `~/.config/luma/settings.json` (set it, restart Luma; it downloads ~12 MB of models and reads the text of photos in the background, after semantic indexing), or that is still running — wait and retry. |
+| `video search is disabled: ...` | The user must set `"video": true` in `~/.config/luma/settings.json` and restart Luma. |
+| `video search is not available: ...` | None of the video sources is ready: enable `"semantic"`, `"ocr"` or `"video_speech"` (restart Luma), or wait for indexing to finish. |
 | `agent API is disabled: ...` | The user must set `"agent_api": true` in `~/.config/luma/settings.json` (no restart needed). |
 | `unexpected answer from Luma (an older version still running?)` | An old Luma daemon is running; restart Luma. |
 | `luma: command not found` | Luma isn't installed or not on `PATH`; use normal file tools. |

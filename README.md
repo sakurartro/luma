@@ -154,16 +154,18 @@ codex mcp add luma -- luma mcp
 and set `"agent_api": true` in `~/.config/luma/settings.json` (no restart needed). The API
 is off by default.
 
-The server offers two tools: `luma_search_images` (what the picture shows, English
-queries) and `luma_search_text` (words written on it, English text). Each returns the
-best matches with a 0–100 score.
+The server offers three tools: `luma_search_images` (what the picture shows, English
+queries), `luma_search_text` (words written on it, English text) and `luma_search_videos`
+(a video and the second in it: what is shown, written or said). Each returns the best
+matches with a 0–100 score; a video hit also has `source` (`frame`, `ocr` or `speech`),
+`t_sec` and, for speech, a `snippet`.
 
 **Requirements** — Luma must be running, and `semantic` (for images) and/or `ocr` (for
-text) must be on, with indexing done. Only folders in `search_dirs` are searched. With a
+text) must be on (for videos: `video` plus `semantic`, `ocr` and/or `video_speech`), with indexing done. Only folders in `search_dirs` are searched. With a
 search not ready the tool answers with a message saying what to enable.
 
-**Without MCP** — `luma query clip "river in fog"` and `luma query ocr "connection refused"`
-print one JSON line. [`agent/skills/luma/SKILL.md`](agent/skills/luma/SKILL.md) is a skill
+**Without MCP** — `luma query clip "river in fog"`, `luma query ocr "connection refused"` and
+`luma query video "the lease ends"` print one JSON line. [`agent/skills/luma/SKILL.md`](agent/skills/luma/SKILL.md) is a skill
 that teaches an agent to use them.
 
 ## Privacy

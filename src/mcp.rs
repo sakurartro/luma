@@ -17,6 +17,7 @@ const VERSION_KEY: &str = "io.modelcontextprotocol/protocolVersion";
 
 const TOOL_IMAGES: &str = "luma_search_images";
 const TOOL_TEXT: &str = "luma_search_text";
+const TOOL_VIDEOS: &str = "luma_search_videos";
 
 // Reaches the model with the server's name even when the tools themselves are
 // deferred (Claude Code shows only their names until it loads the schemas), so
@@ -24,7 +25,8 @@ const TOOL_TEXT: &str = "luma_search_text";
 const INSTRUCTIONS: &str = "Luma has already indexed the user's photos and screenshots on this \
     computer. When the user wants to find a photo, picture or screenshot, call \
     luma_search_images (what it shows) or luma_search_text (words written on it) FIRST, \
-    before find, grep, ls or running OCR yourself: it answers in under a second.";
+    before find, grep, ls or running OCR yourself: it answers in under a second. For a \
+    video (what is on screen, text on screen or what is said) call luma_search_videos.";
 
 /// `luma mcp`: answers until the agent closes stdin. Nothing but protocol
 /// messages may go to stdout.
@@ -71,11 +73,12 @@ fn handle(msg: &Value) -> Option<Value> {
             "instructions": INSTRUCTIONS,
         }),
         "ping" => json!({}),
-        "tools/list" => json!({"tools": [images_tool(), text_tool()]}),
+        "tools/list" => json!({"tools": [images_tool(), text_tool(), videos_tool()]}),
         "tools/call" => {
             let kind = match params["name"].as_str() {
                 Some(TOOL_IMAGES) => Kind::Clip,
                 Some(TOOL_TEXT) => Kind::Ocr,
+                Some(TOOL_VIDEOS) => Kind::Video,
                 _ => {
                     let msg = format!("Unknown tool: {}", params["name"]);
                     return Some(error(id, -32602, &msg, None));
@@ -152,6 +155,31 @@ fn text_tool() -> Value {
     )
 }
 
+fn videos_tool() -> Value {
+    tool(
+        TOOL_VIDEOS,
+        "Search videos by what is on screen, written on screen or said",
+        "Find a video, and the moment in it, by what happens in it, in under a second. Use it \
+            when the user wants a video, recording, lecture, meeting or screencast, or the place \
+            in one where something is shown, written or said (\"the video where they sign the \
+            lease\", \"where does the talk mention budgets\"). Searches three ways at once: a \
+            frame by what it SHOWS (CLIP, describe the picture in English), text on a frame (OCR, \
+            English words as written) and the speech (English only; plain words from the \
+            conversation). Returns JSON [{\"path\", \"source\", \"t_sec\", \"score\", \
+            \"snippet\"}], best first. source is \"frame\", \"ocr\" or \"speech\"; t_sec is \
+            the second in the video where the match is, give it to the user as m:ss; snippet \
+            (speech only) is the words around the match, so a speech hit often needs no \
+            further check. Scores are relative within one source: 100 is the best of that \
+            source, and only the same video from two sources is a strong sign. A video appears \
+            once per source. [] means nothing matched: rephrase, or try luma_search_images for \
+            photos. Only videos in search_dirs of ~/.config/luma/settings.json are indexed, a \
+            few frames each and the speech of videos up to video_speech_max_min minutes. Needs \
+            \"agent_api\": true and \"video\": true there, plus \"semantic\", \"ocr\" and/or \
+            \"video_speech\" for the matching source.",
+        "What to find in the video, in English: what is shown, the words written on screen or the words said",
+    )
+}
+
 fn tool(name: &str, title: &str, description: &str, query_help: &str) -> Value {
     json!({
         "name": name,
@@ -224,7 +252,7 @@ mod tests {
         let modern = request("server/discover", modern(json!({})));
         for result in [&legacy["result"], &modern["result"]] {
             let text = result["instructions"].as_str().unwrap();
-            assert!(text.contains(TOOL_IMAGES) && text.contains(TOOL_TEXT));
+            assert!(text.contains(TOOL_IMAGES) && text.contains(TOOL_TEXT) && text.contains(TOOL_VIDEOS));
         }
     }
 
@@ -242,7 +270,7 @@ mod tests {
 
         let list = request("tools/list", modern(json!({})));
         let names: Vec<_> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].clone()).collect();
-        assert_eq!(names, [TOOL_IMAGES, TOOL_TEXT]);
+        assert_eq!(names, [TOOL_IMAGES, TOOL_TEXT, TOOL_VIDEOS]);
         // Legacy answers stay as they were.
         assert!(request("tools/list", json!({}))["result"].get("resultType").is_none());
 
@@ -262,5 +290,7 @@ mod tests {
         assert_eq!(call(json!({"query": "cat", "limit": "5"}))["isError"], true);
         let text = request("tools/call", json!({"name": TOOL_TEXT, "arguments": {"query": ""}}));
         assert_eq!(text["result"]["isError"], true);
+        let video = request("tools/call", json!({"name": TOOL_VIDEOS, "arguments": {"query": "", "limit": 3}}));
+        assert_eq!(video["result"]["isError"], true);
     }
 }
