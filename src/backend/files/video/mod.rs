@@ -1,6 +1,7 @@
 // Search inside videos: frames (CLIP, OCR) in video_meta + video_frames.
 
 pub mod frames;
+pub mod speech;
 
 use crate::backend::files::files_search::video_where;
 use anyhow::Result;
