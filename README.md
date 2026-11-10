@@ -169,7 +169,7 @@ that teaches an agent to use them.
 ## Privacy
 
 Nothing leaves your machine except two things you can turn off: the model download
-(`semantic` / `ocr`, once) and exchange rates for `100 usd to eur` (`currency`, cached for
+(`semantic` / `ocr` / `video_speech`, once) and exchange rates for `100 usd to eur` (`currency`, cached for
 an hour). Photos, thumbnails, the index and agent queries stay local.
 
 ## Usage
@@ -188,8 +188,8 @@ an hour). Photos, thumbnails, the index and agent queries stay local.
 ## Configuration
 
 Edit settings in the launcher (`Alt+4` / `Ctrl+,`) or by hand in
-`~/.config/luma/settings.json`. Hand edits, `search_dirs`, `exclude_dirs`, `semantic`
-and `ocr` apply after a restart (the menu offers a Restart button); everything else
+`~/.config/luma/settings.json`. Hand edits, `search_dirs`, `exclude_dirs`, `semantic`,
+`ocr` and the `video*` options apply after a restart (the menu offers a Restart button); everything else
 applies at once. New options are appended with their defaults; a broken file
 falls back to defaults and is kept.
 
@@ -202,11 +202,14 @@ falls back to defaults and is kept.
 | `semantic` | `false` | Photo search by meaning (CLIP, English queries). Downloads ~154 MB of models, indexes photos in the background |
 | `ocr` | `false` | Image search by the text on them (PaddleOCR, English). Downloads ~12 MB of models, runs after semantic indexing |
 | `docs` | `false` | Search inside document contents (txt, md, pdf, docx…). Text goes into the local db. Limits `docs_max_file_mb`, `docs_max_text_kb`, `docs_max_pdf_pages` are tunable in settings.json |
+| `video` | `false` | Search inside videos (mp4, mkv, webm, avi, mov) by a few frames per video: by meaning with `semantic`, by on-screen text with `ocr`. Needs `ffmpeg` and `ffprobe` in `PATH`. `video_frame_every_sec` (10) and `video_max_frames` (32, at least 4 are taken) set the sampling. A hit shows the time in the video, e.g. `at 1:42` |
+| `video_speech` | `false` | Also search what is said in videos (needs `video`): Moonshine base speech recognition, English only. Downloads ~66 MB, the heaviest indexing step, runs after `semantic` and `ocr`. Videos longer than `video_speech_max_min` (60) minutes are skipped. Hits show the time and the words around the match |
 | `agent_api` | `false` | Lets agents query Luma (`luma mcp`, `luma query`). Set by Settings → Agents |
 | `currency` | `true` | `100 usd to eur` via open.er-api.com, rates cached for an hour. `false` = no network; the calculator still works |
 
-`semantic` and `ocr` cost nothing while off; turning them off keeps the models
-and index on disk for later.
+`semantic`, `ocr` and `video_speech` cost nothing while off; turning them off keeps
+the models on disk for later. Turning `video` off drops the video index; `video_speech`
+off drops the recognized speech.
 
 Where things live (`$XDG_CONFIG_HOME` / `$XDG_CACHE_HOME` respected):
 `~/.config/luma/` — settings, `main.sqlite3`, `models/`;
@@ -226,6 +229,11 @@ Full example (the defaults):
   "semantic": false,
   "ocr": false,
   "docs": false,
+  "video": false,
+  "video_frame_every_sec": 10,
+  "video_max_frames": 32,
+  "video_speech": false,
+  "video_speech_max_min": 60,
   "agent_api": false,
   "currency": true
 }
@@ -259,6 +267,7 @@ Light:
 ## Requirements
 
 - Linux (glibc 2.39+ — Ubuntu 24.04, Fedora 40+, Arch; the ONNX runtime of the semantic search sets this floor)
+- `ffmpeg` and `ffprobe` in `PATH` for video search (`video`); everything else works without them
 - The prebuilt binary links at runtime against libfontconfig, libGL (mesa) and libxkbcommon
 - Power menu uses systemd: `systemctl poweroff|reboot|suspend`; lock is `loginctl lock-session`, so a locker must listen for it (e.g. hypridle with `lock_cmd`)
 
