@@ -368,7 +368,7 @@ fn index_pass(rerun: bool) {
         image_where()
     );
     let total = conn.query_row(&total_sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
-    let videos = if VIDEO.get().is_some() { video::count_candidates(&conn).unwrap_or(0) } else { 0 };
+    let videos = if VIDEO.get().is_some() { crate::backend::files::video::count_stale(&conn, "clip").unwrap_or(0) } else { 0 };
     if rerun && total == 0 && videos == 0 {
         return;
     }
@@ -378,7 +378,7 @@ fn index_pass(rerun: bool) {
         if let Err(err) = delete_orphans(&conn) {
             eprintln!("clip orphan cleanup error: {err}");
         }
-        if let Err(err) = video::delete_orphans(&conn) {
+        if let Err(err) = crate::backend::files::video::delete_orphans(&conn) {
             eprintln!("video orphan cleanup error: {err}");
         }
     }

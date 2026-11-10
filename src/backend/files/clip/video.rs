@@ -3,8 +3,7 @@
 
 use super::inference::{image_tensor, ClipModels, INFERENCE_BATCH};
 use super::index::vec_to_blob;
-use crate::backend::files::files_search::video_where;
-use crate::backend::files::video::frames;
+use crate::backend::files::video::{self, frames};
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::Path;
@@ -15,35 +14,6 @@ pub static VID_TOTAL: AtomicUsize = AtomicUsize::new(0);
 pub static VID_DONE: AtomicUsize = AtomicUsize::new(0);
 
 const KIND: &str = "clip";
-
-// Same join as the photo candidates, against video_meta instead of embeddings.
-const STALE_JOIN: &str = "FROM files f LEFT JOIN video_meta m
-     ON m.file_path = f.path AND m.kind = 'clip' AND m.mtime = f.mtime
-     WHERE m.file_path IS NULL";
-
-pub(super) fn count_candidates(conn: &Connection) -> Result<i64> {
-    Ok(conn.query_row(&format!("SELECT COUNT(*) {STALE_JOIN} AND {}", video_where()), [], |r| r.get(0))?)
-}
-
-// Videos from `files` not processed by clip at their current mtime, paged by path.
-fn fetch_candidates(conn: &Connection, after: &str, limit: i64) -> Result<Vec<(String, i64)>> {
-    let sql = format!("SELECT f.path, f.mtime {STALE_JOIN} AND {} AND f.path > ?1 ORDER BY f.path LIMIT ?2", video_where());
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
-        .query_map(params![after, limit], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-}
-
-// Every video row of a file that vanished from the rescan, whichever source
-// wrote it: the file is gone for all of them.
-pub(super) fn delete_orphans(conn: &Connection) -> Result<()> {
-    conn.execute_batch(
-        "DELETE FROM video_meta WHERE file_path NOT IN (SELECT path FROM files);
-         DELETE FROM video_frames WHERE file_path NOT IN (SELECT path FROM files);",
-    )?;
-    Ok(())
-}
 
 // Replaces the file's frame vectors and marks it done at `mtime`. Rows keep
 // their ocr text; a row left with neither vec nor ocr (old timestamp after the
@@ -106,11 +76,11 @@ fn embed_video(models: &mut ClipModels, path: &str, every_sec: u32, max_frames: 
 
 /// Embeds every stale video; called by the clip worker after the photos.
 pub(super) fn index_videos(models: &mut ClipModels, conn: &mut Connection, every_sec: u32, max_frames: u32) {
-    VID_TOTAL.store(count_candidates(conn).unwrap_or(0).max(0) as usize, Ordering::Relaxed);
+    VID_TOTAL.store(video::count_stale(conn, KIND).unwrap_or(0).max(0) as usize, Ordering::Relaxed);
     VID_DONE.store(0, Ordering::Relaxed);
     let mut after = String::new();
     loop {
-        let Ok(chunk) = fetch_candidates(conn, &after, 16) else { break };
+        let Ok(chunk) = video::fetch_stale(conn, KIND, &after, 16) else { break };
         if chunk.is_empty() {
             break;
         }
@@ -142,28 +112,6 @@ mod tests {
     }
 
     #[test]
-    fn candidates_need_video_and_fresh_clip_mtime() {
-        let conn = conn();
-        for (path, mtime) in [
-            ("/v/a.mp4", 5), // never processed -> candidate
-            ("/v/b.mkv", 5), // processed at an old mtime -> candidate
-            ("/v/c.mp4", 7), // fresh -> skip
-            ("/v/d.jpg", 5), // not a video -> skip
-            ("/v/e.mov", 5), // fresh for ocr only -> candidate
-        ] {
-            conn.execute("INSERT INTO files (name, path, mtime) VALUES ('x', ?1, ?2)", params![path, mtime]).unwrap();
-        }
-        conn.execute_batch(
-            "INSERT INTO video_meta VALUES ('/v/b.mkv', 'clip', 4), ('/v/c.mp4', 'clip', 7), ('/v/e.mov', 'ocr', 5);",
-        )
-        .unwrap();
-        let paths: Vec<String> = fetch_candidates(&conn, "", 100).unwrap().into_iter().map(|(p, _)| p).collect();
-        assert_eq!(paths, ["/v/a.mp4", "/v/b.mkv", "/v/e.mov"]);
-        assert_eq!(count_candidates(&conn).unwrap(), 3);
-        assert_eq!(fetch_candidates(&conn, "/v/b.mkv", 100).unwrap().len(), 1);
-    }
-
-    #[test]
     fn save_replaces_vectors_keeps_ocr_and_marks_done() {
         let mut conn = conn();
         conn.execute("INSERT INTO files (name, path, mtime) VALUES ('a', '/v/a.mp4', 9)", []).unwrap();
@@ -184,12 +132,12 @@ mod tests {
         // 1.0 had only a vector -> gone; 3.0 keeps its ocr text with the new vector
         assert_eq!(rows, [(2.0, true, None), (3.0, true, Some("hi".into()))]);
         // marked done: a rerun skips it
-        assert!(fetch_candidates(&conn, "", 100).unwrap().is_empty());
+        assert!(video::fetch_stale(&conn, KIND, "", 100).unwrap().is_empty());
 
         // a broken video (no frames) is marked too, so it isn't retried every start
         conn.execute("INSERT INTO files (name, path, mtime) VALUES ('b', '/v/b.mp4', 1)", []).unwrap();
         save(&mut conn, "/v/b.mp4", 1, &[]).unwrap();
-        assert!(fetch_candidates(&conn, "", 100).unwrap().is_empty());
+        assert!(video::fetch_stale(&conn, KIND, "", 100).unwrap().is_empty());
     }
 
     // Needs the clip models in ~/.config/luma/models/clip and a real video:
@@ -204,19 +152,5 @@ mod tests {
         println!("{path}: {} frames in {:?}", vecs.len(), start.elapsed());
         assert!(!vecs.is_empty());
         assert!(vecs.iter().all(|(_, v)| v.len() == vecs[0].1.len()));
-    }
-
-    #[test]
-    fn orphans_of_every_source_are_removed() {
-        let conn = conn();
-        conn.execute("INSERT INTO files (name, path, mtime) VALUES ('a', '/v/a.mp4', 1)", []).unwrap();
-        conn.execute_batch(
-            "INSERT INTO video_meta VALUES ('/v/a.mp4', 'clip', 1), ('/gone.mp4', 'clip', 1), ('/gone.mp4', 'ocr', 1);
-             INSERT INTO video_frames VALUES ('/v/a.mp4', 1.0, x'00', NULL), ('/gone.mp4', 1.0, x'00', 'x');",
-        )
-        .unwrap();
-        delete_orphans(&conn).unwrap();
-        let count = |t: &str| -> i64 { conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap() };
-        assert_eq!((count("video_meta"), count("video_frames")), (1, 1));
     }
 }

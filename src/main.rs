@@ -176,7 +176,7 @@ fn main() -> Result<()> {
                 clip::start_indexing(&st);
                 // Waits for the clip worker, so keep it after the call above;
                 // no-op when the `ocr` setting is off.
-                ocr::start_indexing(st.ocr);
+                ocr::start_indexing(&st);
                 // Needs only the finished scan; no-op when the `docs` setting is off.
                 docs::start_indexing(&st);
             }
