@@ -54,6 +54,7 @@ pub fn start_files_watcher(dirs: &[String], exclude: &[String]) {
             if is_video {
                 super::clip::schedule_reindex();
                 super::ocr::schedule_reindex();
+                super::video::speech_index::schedule_reindex();
             }
             if is_doc {
                 super::docs::schedule_reindex();

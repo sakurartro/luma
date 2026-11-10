@@ -10,7 +10,7 @@ use backend::apps::apps_search::Apps;
 use backend::apps::db_init::{DbState, open_conn};
 use backend::apps::watcher::start_watcher;
 use backend::files::clip;
-use backend::files::{docs, ocr};
+use backend::files::{docs, ocr, video};
 use backend::files::files_search;
 use backend::files::watcher::start_files_watcher;
 use backend::settings;
@@ -177,6 +177,8 @@ fn main() -> Result<()> {
                 // Waits for the clip worker, so keep it after the call above;
                 // no-op when the `ocr` setting is off.
                 ocr::start_indexing(&st);
+                // Waits for clip and ocr; no-op unless `video` and `video_speech` are on.
+                video::speech_index::start_indexing(&st);
                 // Needs only the finished scan; no-op when the `docs` setting is off.
                 docs::start_indexing(&st);
             }

@@ -20,6 +20,17 @@ use std::time::{Duration, Instant};
 pub static OCR_TOTAL: AtomicUsize = AtomicUsize::new(0);
 pub static OCR_DONE: AtomicUsize = AtomicUsize::new(0);
 
+// Set once the ocr startup pass is over (finished, disabled, failed or
+// panicked); the speech worker waits for it, like ocr waits for CLIP_DONE.
+pub static OCR_PASS_DONE: AtomicBool = AtomicBool::new(false);
+
+struct SetPassDoneOnDrop;
+impl Drop for SetPassDoneOnDrop {
+    fn drop(&mut self) {
+        OCR_PASS_DONE.store(true, Ordering::Release);
+    }
+}
+
 // Model download progress in bytes; OCR_DL_TOTAL 0 = no download in progress.
 pub static OCR_DL_TOTAL: AtomicUsize = AtomicUsize::new(0);
 pub static OCR_DL_DONE: AtomicUsize = AtomicUsize::new(0);
@@ -99,6 +110,7 @@ pub(super) static VIDEO: OnceLock<(u32, u32)> = OnceLock::new();
 /// the download fails or models/ocr/ is broken.
 pub fn start_indexing(st: &Settings) {
     if !st.ocr {
+        OCR_PASS_DONE.store(true, Ordering::Release);
         return;
     }
     if st.video {
@@ -151,6 +163,7 @@ pub fn schedule_reindex() {
 // One indexing pass; `rerun` = a later pass of the session: skips loading the
 // models when there is nothing to recognize.
 fn index_pass(rerun: bool) {
+    let _done = SetPassDoneOnDrop;
     // After clip is done (or off): one ONNX session and one CPU-heavy
     // worker at a time. Needs clip::start_indexing to be called, it sets
     // the flag even when `semantic` is off.

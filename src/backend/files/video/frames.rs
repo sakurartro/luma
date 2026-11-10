@@ -49,6 +49,18 @@ pub fn duration_sec(path: &Path) -> Result<f64> {
     }
 }
 
+/// Whether the file has an audio stream.
+pub fn has_audio(path: &Path) -> Result<bool> {
+    let args: [&OsStr; 9] = [
+        "-v".as_ref(), "error".as_ref(),
+        "-select_streams".as_ref(), "a".as_ref(),
+        "-show_entries".as_ref(), "stream=index".as_ref(),
+        "-of".as_ref(), "csv=p=0".as_ref(),
+        path.as_os_str(),
+    ];
+    Ok(!run("ffprobe", &args)?.trim_ascii().is_empty())
+}
+
 /// Seconds to sample: one frame per `every_sec`, at least MIN_FRAMES and at
 /// most `max_frames`, frame i in the middle of slice i of n equal slices.
 pub fn timestamps(duration: f64, every_sec: u32, max_frames: u32) -> Vec<f64> {
@@ -112,6 +124,7 @@ mod tests {
 
         let d = duration_sec(&video).unwrap();
         assert!((d - 3.0).abs() < 0.2, "{d}");
+        assert!(!has_audio(&video).unwrap());
         let frame = frame_at(&video, timestamps(d, 10, 32)[1]).unwrap();
         assert_eq!((frame.width(), frame.height()), (64, 48));
 

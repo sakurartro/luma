@@ -15,11 +15,11 @@ use super::Ctx;
 
 // search_dirs / semantic / ocr / docs (and its limits) / exclude_dirs / video (and its limits) as the watcher and indexers got
 // them at startup; they can't be reconfigured live, so a difference asks for a restart.
-type StartValues = (Vec<String>, bool, bool, bool, Vec<String>, (u64, usize, u32), (bool, u32, u32));
+type StartValues = (Vec<String>, bool, bool, bool, Vec<String>, (u64, usize, u32), (bool, u32, u32, bool, u32));
 static STARTED_WITH: OnceLock<StartValues> = OnceLock::new();
 
 fn restart_values(st: &Settings) -> StartValues {
-    (st.search_dirs.clone(), st.semantic, st.ocr, st.docs, st.exclude_dirs.clone(), (st.docs_max_file_mb, st.docs_max_text_kb, st.docs_max_pdf_pages), (st.video, st.video_frame_every_sec, st.video_max_frames))
+    (st.search_dirs.clone(), st.semantic, st.ocr, st.docs, st.exclude_dirs.clone(), (st.docs_max_file_mb, st.docs_max_text_kb, st.docs_max_pdf_pages), (st.video, st.video_frame_every_sec, st.video_max_frames, st.video_speech, st.video_speech_max_min))
 }
 
 pub fn remember_startup(st: &Settings) {

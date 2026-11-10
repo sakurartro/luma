@@ -4,6 +4,7 @@ use crate::backend::apps::fuzzy;
 use crate::backend::apps::watcher::APPS_CHANGED;
 use crate::backend::files::clip;
 use crate::backend::files::files_search;
+use crate::backend::files::video::{speech, speech_index};
 use crate::backend::files::{docs, ocr};
 use crate::backend::general_features::engine;
 use crate::{AppItem, FileItem, MainWindow};
@@ -52,6 +53,10 @@ fn update_model_progress(window: &MainWindow) {
     let ocr_dl_done = ocr::OCR_DL_DONE.load(Ordering::Relaxed);
     let ocr_total = ocr::OCR_TOTAL.load(Ordering::Relaxed);
     let ocr_done = ocr::OCR_DONE.load(Ordering::Relaxed);
+    let speech_dl_total = speech::SPEECH_DL_TOTAL.load(Ordering::Relaxed);
+    let speech_dl_done = speech::SPEECH_DL_DONE.load(Ordering::Relaxed);
+    let speech_total = speech_index::SPEECH_TOTAL.load(Ordering::Relaxed);
+    let speech_done = speech_index::SPEECH_DONE.load(Ordering::Relaxed);
     let docs_total = docs::DOCS_TOTAL.load(Ordering::Relaxed);
     let docs_done = docs::DOCS_DONE.load(Ordering::Relaxed);
     let (busy, label, percent) = if dl_total > 0 && dl_done < dl_total {
@@ -64,6 +69,10 @@ fn update_model_progress(window: &MainWindow) {
         (true, "Downloading OCR models...", (ocr_dl_done.min(ocr_dl_total) * 100 / ocr_dl_total) as i32)
     } else if ocr_total > 0 && ocr_done < ocr_total {
         (true, "Recognizing text...", (ocr_done.min(ocr_total) * 100 / ocr_total) as i32)
+    } else if speech_dl_total > 0 && speech_dl_done < speech_dl_total {
+        (true, "Downloading speech model...", (speech_dl_done.min(speech_dl_total) * 100 / speech_dl_total) as i32)
+    } else if speech_total > 0 && speech_done < speech_total {
+        (true, "Recognizing speech...", (speech_done.min(speech_total) * 100 / speech_total) as i32)
     } else if docs_total > 0 && docs_done < docs_total {
         (true, "Indexing docs...", (docs_done.min(docs_total) * 100 / docs_total) as i32)
     } else {

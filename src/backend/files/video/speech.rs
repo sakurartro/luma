@@ -277,6 +277,7 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
+        assert!(crate::backend::files::video::frames::has_audio(&audio).unwrap());
 
         let mut chunks = Vec::new();
         for_each_chunk(&audio, |c| {
