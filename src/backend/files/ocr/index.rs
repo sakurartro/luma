@@ -91,7 +91,7 @@ fn upsert_batch(conn: &mut Connection, rows: &[(String, i64, String)]) -> Result
 
 // (video_frame_every_sec, video_max_frames) when video frames get recognized:
 // `video` is on and ffmpeg was found. Set once by start_indexing.
-static VIDEO: OnceLock<(u32, u32)> = OnceLock::new();
+pub(super) static VIDEO: OnceLock<(u32, u32)> = OnceLock::new();
 
 /// Start the indexing worker in the background; gated by the `ocr` setting
 /// (off = the feature costs nothing: no models, no RAM, no CPU). On first

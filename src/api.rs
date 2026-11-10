@@ -66,7 +66,11 @@ fn search_response(kind: Kind, query: &str, settings: &settings::Settings) -> St
         Kind::Ocr if !ocr::ocr_ready() => {
             return error("text search is not available: enable \"ocr\" in settings.json or wait for indexing to finish");
         }
-        Kind::Ocr => ocr::ocr_search(query),
+        // photos only: videos get their own tool
+        Kind::Ocr => ocr::ocr_search(query)
+            .into_iter()
+            .filter_map(|(f, score, t_sec)| t_sec.is_none().then_some((f, score)))
+            .collect(),
     };
     hits_json(hits, &settings.hide_patterns)
 }

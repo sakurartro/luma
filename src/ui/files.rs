@@ -163,7 +163,9 @@ pub(super) fn extra_file_items(
     hide_patterns: &[String],
     limit: usize,
 ) -> Vec<(FileEntry, i32, i32, String)> {
-    let ocr_hits = ocr::ocr_search(query).into_iter().map(|(f, score)| (f, ocr::MATCH_OCR, score, String::new()));
+    let ocr_hits = ocr::ocr_search(query)
+        .into_iter()
+        .map(|(f, score, t_sec)| (f, ocr::MATCH_OCR, score, t_sec.map(at_time).unwrap_or_default()));
     let clip_hits = clip::clip_search(query, generation)
         .into_iter()
         .map(|(f, score, t_sec)| (f, clip::MATCH_SEMANTIC, score, t_sec.map(at_time).unwrap_or_default()));
