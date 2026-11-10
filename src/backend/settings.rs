@@ -55,6 +55,13 @@ pub struct Settings {
     pub video_frame_every_sec: u32,
     #[serde(default = "default_video_max_frames")]
     pub video_max_frames: u32,
+    // Speech recognition in video audio (needs `video`); off by default, the
+    // most expensive part. Videos longer than video_speech_max_min minutes are
+    // skipped (their frames are still indexed). Apply after a restart.
+    #[serde(default)]
+    pub video_speech: bool,
+    #[serde(default = "default_video_speech_max_min")]
+    pub video_speech_max_min: u32,
     // Local API for AI agents (`luma query`, MCP); off by default.
     #[serde(default)]
     pub agent_api: bool,
@@ -82,6 +89,10 @@ fn default_video_frame_every_sec() -> u32 {
 
 fn default_video_max_frames() -> u32 {
     32
+}
+
+fn default_video_speech_max_min() -> u32 {
+    60
 }
 
 fn default_currency() -> bool {
@@ -123,6 +134,8 @@ impl Default for Settings {
             video: false,
             video_frame_every_sec: default_video_frame_every_sec(),
             video_max_frames: default_video_max_frames(),
+            video_speech: false,
+            video_speech_max_min: default_video_speech_max_min(),
             agent_api: false,
             currency: default_currency(),
         }
@@ -373,6 +386,8 @@ mod tests {
         assert!(json.contains(r#""video":false"#));
         assert!(json.contains(r#""video_frame_every_sec":10"#));
         assert!(json.contains(r#""video_max_frames":32"#));
+        assert!(json.contains(r#""video_speech":false"#));
+        assert!(json.contains(r#""video_speech_max_min":60"#));
     }
 
     #[test]

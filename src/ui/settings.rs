@@ -48,7 +48,7 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ("Files", &["search_dirs", "hide_patterns", "exclude_dirs"]),
     ("Photos", &["semantic", "ocr"]),
     ("Documents", &["docs", "docs_max_file_mb", "docs_max_text_kb", "docs_max_pdf_pages"]),
-    ("Videos", &["video", "video_frame_every_sec", "video_max_frames"]),
+    ("Videos", &["video", "video_frame_every_sec", "video_max_frames", "video_speech", "video_speech_max_min"]),
     ("Calculator", &["currency"]),
 ];
 
