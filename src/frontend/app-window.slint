@@ -167,6 +167,9 @@ export component MainWindow inherits Window {
     }
     in-out property <string> query-result;
     in-out property <string> input-text;
+    // small preview of the pasted image, shown over the marker text in the search box
+    in-out property <image> paste-thumb;
+    in-out property <bool> has-paste-thumb: false;
     in-out property <bool> indexing: false;
     in-out property <int> index-percent: 0;
     in-out property <bool> clip-busy: false;
@@ -250,7 +253,7 @@ export component MainWindow inherits Window {
                         search-input := TextInput {
                             text <=> root.input-text;
                             font-size: 17px;
-                            color: Theme.text;
+                            color: root.has-paste-thumb ? transparent : Theme.text;
                             vertical-alignment: center;
                             key-pressed(event) => {
                                 if event.modifiers.alt && event.text == "1" {
@@ -285,6 +288,11 @@ export component MainWindow inherits Window {
                                 return reject;
                             }
                             edited => {
+                                // any edit drops the preview together with its marker text
+                                if root.has-paste-thumb {
+                                    root.has-paste-thumb = false;
+                                    self.text = "";
+                                }
                                 root.sel = root.mode == 3 ? -1 : 0;
                                 if root.mode == 0 && self.text != "" {
                                     root.search_all(self.text);
@@ -342,6 +350,15 @@ if root.input-text == "": Text {
                         font-size: 17px;
                         vertical-alignment: center;
                     }
+                    }
+
+                    if root.has-paste-thumb: Image {
+                        source: root.paste-thumb;
+                        x: 42px;
+                        y: 8px;
+                        height: parent.height - 16px;
+                        width: 80px;
+                        image-fit: contain;
                     }
                 }
 

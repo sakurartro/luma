@@ -39,9 +39,10 @@ pub(crate) struct ClipModels {
     tokenizer: Tokenizer,
 }
 
-// What survives indexing: queries need only the text side; the vision
-// session is dropped after indexing so its ORT arena is freed.
+// What survives indexing and stays loaded while clip is on: the text side for
+// text queries and the vision side for image-to-image (clipboard) queries.
 pub(crate) struct QueryModels {
+    vision: Session,
     text: Session,
     tokenizer: Tokenizer,
 }
@@ -89,10 +90,9 @@ impl ClipModels {
         Some(ClipModels { vision, text, tokenizer })
     }
 
-    // End of the indexing worker: consume the full pair, drop the vision
-    // session (its arena is the memory hog) and keep only the query side.
+    // End of the indexing worker: the sessions stay resident for queries.
     pub(crate) fn into_query(self) -> QueryModels {
-        QueryModels { text: self.text, tokenizer: self.tokenizer }
+        QueryModels { vision: self.vision, text: self.text, tokenizer: self.tokenizer }
     }
 
     // None rows = failed images; they stay unindexed and are retried on the
@@ -130,14 +130,14 @@ impl ClipModels {
     pub(crate) fn embed_tensors(&mut self, tensors: &[Array3<f32>]) -> Result<Vec<Vec<f32>>> {
         run_images(&mut self.vision, tensors)
     }
+}
 
+impl QueryModels {
     // Одна картинка (например, из буфера обмена): батч 1. Вектор не нормализован.
     pub(crate) fn embed_image(&mut self, img: &image::DynamicImage) -> Result<Vec<f32>> {
         Ok(run_images(&mut self.vision, &[image_tensor(img)])?.remove(0))
     }
-}
 
-impl QueryModels {
     // Kept hot in the MODELS mutex; clip_search calls it per query.
     pub(crate) fn embed_text(&mut self, text: &str) -> Result<Vec<f32>> {
         let ids = tokenize_text(&self.tokenizer, text)?;

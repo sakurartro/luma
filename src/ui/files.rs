@@ -397,6 +397,12 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
             std::thread::spawn(move || {
                 let Some(img) = clip::read_image() else { return };
                 let hits = clip::clip_similar(&img, generation);
+                let thumb = img.thumbnail(160, 96).into_rgba8();
+                let thumb = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    thumb.as_raw(),
+                    thumb.width(),
+                    thumb.height(),
+                );
                 let _ = weak.upgrade_in_event_loop(move |window| {
                     if clip::is_stale(generation) {
                         return;
@@ -406,6 +412,8 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     }
                     // the grid shows the home view while the input is empty
                     window.set_input_text("similar to clipboard image".into());
+                    window.set_paste_thumb(slint::Image::from_rgba8(thumb));
+                    window.set_has_paste_thumb(true);
                     window.set_sel(0);
                     set_files(
                         &window,

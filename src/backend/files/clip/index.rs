@@ -22,9 +22,8 @@ pub static EMB_DONE: AtomicUsize = AtomicUsize::new(0);
 pub static DL_TOTAL: AtomicUsize = AtomicUsize::new(0);
 pub static DL_DONE: AtomicUsize = AtomicUsize::new(0);
 
-// Query side of the models, filled at the end of indexing; None until then
-// (or without models/clip/). The vision session is consumed and dropped by
-// into_query() there — its arena is the memory hog and queries don't need it.
+// Query side of the models (text + vision), filled at the end of indexing and
+// kept for the rest of the run; None until then (or without models/clip/).
 pub static MODELS: Mutex<Option<QueryModels>> = Mutex::new(None);
 
 // Generation of the newest search query. Every keystroke spawns a worker that
@@ -218,28 +217,23 @@ pub fn clip_search(query: &str, generation: u64) -> Vec<(FileEntry, i32, Option<
 }
 
 /// Image -> image search: finds photos similar to `img` (e.g. from the
-/// clipboard). Loads the vision model for this one query under ONNX_LOCK and
-/// drops it afterwards. Empty without models/clip/ or when superseded.
+/// clipboard) with the resident vision model. Empty while the models aren't
+/// loaded or when superseded.
 pub fn clip_similar(img: &image::DynamicImage, generation: u64) -> Vec<(FileEntry, i32)> {
-    if !clip_ready() {
-        return Vec::new();
-    }
-    let _onnx = ONNX_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if is_stale(generation) {
-        return Vec::new();
-    }
-    let Some(mut models) = ClipModels::load() else {
-        return Vec::new();
-    };
-    let embedded = models.embed_image(img);
-    drop(models);
-    // glibc holds the freed pages in its arenas; give them back to the OS.
-    unsafe { libc::malloc_trim(0) };
-    let mut query_vec = match embedded {
-        Ok(v) => v,
-        Err(err) => {
-            eprintln!("clip image embed error: {err}");
+    let mut query_vec = {
+        let mut guard = MODELS.lock().unwrap();
+        if is_stale(generation) {
             return Vec::new();
+        }
+        let Some(models) = guard.as_mut() else {
+            return Vec::new();
+        };
+        match models.embed_image(img) {
+            Ok(v) => v,
+            Err(err) => {
+                eprintln!("clip image embed error: {err}");
+                return Vec::new();
+            }
         }
     };
     l2_normalize(&mut query_vec);
@@ -460,8 +454,7 @@ fn index_pass(rerun: bool) {
         video::index_videos(&mut models, &mut conn, every_sec, max_frames);
     }
     // Models + vector snapshot go live only now: a query during indexing
-    // would score an incomplete cache. into_query() drops the vision
-    // session here, releasing its ORT arena back to the OS.
+    // would score an incomplete cache.
     *MODELS.lock().unwrap() = Some(models.into_query());
     *VECTORS.lock().unwrap() = load_vectors(&conn);
     // glibc holds the freed pages in its arenas; give them back to the OS.
