@@ -125,9 +125,15 @@ impl ClipModels {
         out
     }
 
+    // Video frames, already turned into tensors by image_tensor; one row
+    // per tensor. Callers keep groups at INFERENCE_BATCH.
+    pub(crate) fn embed_tensors(&mut self, tensors: &[Array3<f32>]) -> Result<Vec<Vec<f32>>> {
+        run_images(&mut self.vision, tensors)
+    }
+
     // Одна картинка (например, из буфера обмена): батч 1. Вектор не нормализован.
     pub(crate) fn embed_image(&mut self, img: &image::DynamicImage) -> Result<Vec<f32>> {
-        Ok(run_images(&mut self.vision, &[preprocess_dynamic(img)])?.remove(0))
+        Ok(run_images(&mut self.vision, &[image_tensor(img)])?.remove(0))
     }
 }
 
@@ -142,7 +148,7 @@ impl QueryModels {
 
 /// Изображение -> [3,224,224] f32 (RGB, нормализация CLIP).
 fn preprocess_image(path: &Path) -> Result<Array3<f32>> {
-    Ok(preprocess_dynamic(&open_image(path)?))
+    Ok(image_tensor(&open_image(path)?))
 }
 
 /// Декодирует файл с лимитами (см. ниже); общий для индексации и поиска похожих.
@@ -161,8 +167,8 @@ pub(crate) fn open_image(path: &Path) -> Result<image::DynamicImage> {
         .with_context(|| format!("decode {}", path.display()))
 }
 
-/// То же для уже декодированной картинки (например, из буфера обмена).
-fn preprocess_dynamic(img: &image::DynamicImage) -> Array3<f32> {
+/// Decoded image -> [3,224,224] f32 (RGB, CLIP normalization).
+pub(crate) fn image_tensor(img: &image::DynamicImage) -> Array3<f32> {
     let resized = image::imageops::resize(
         &img.to_rgb8(),
         IMAGE_SIZE as u32,
@@ -247,9 +253,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preprocess_dynamic_shape_and_norm() {
+    fn image_tensor_shape_and_norm() {
         let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 4, image::Rgb([255, 255, 255])));
-        let t = preprocess_dynamic(&img);
+        let t = image_tensor(&img);
         assert_eq!(t.shape(), &[3, IMAGE_SIZE, IMAGE_SIZE]);
         assert!((t[[0, 0, 0]] - (1.0 - MEAN[0]) / STD[0]).abs() < 1e-4);
     }

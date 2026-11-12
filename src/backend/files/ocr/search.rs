@@ -24,9 +24,12 @@ struct OcrDoc {
     mtime: i64,
     // lowercase words of the recognized text, repeats kept
     words: Vec<Vec<char>>,
+    // a video has one doc per frame with text, t_sec = where the frame is
+    t_sec: Option<f64>,
 }
 
-// Snapshot of ocr_text joined with files; filled by the indexing worker
+// Snapshot of ocr_text (plus the video frame texts when video search is on)
+// joined with files; filled by the indexing worker
 // (reload) at its start and end, empty while the feature is off.
 static DOCS: Mutex<Vec<OcrDoc>> = Mutex::new(Vec::new());
 
@@ -47,12 +50,19 @@ fn words(text: &str) -> Vec<Vec<char>> {
 
 // Texts of files that vanished from the scan are excluded by the JOIN;
 // empty texts (no text found on the image) have nothing to match.
-fn load_docs(conn: &Connection) -> Vec<OcrDoc> {
+fn load_docs(conn: &Connection, video: bool) -> Vec<OcrDoc> {
+    let frames = if video {
+        "UNION ALL SELECT f.name, f.path, f.mtime, v.ocr, v.t_sec FROM video_frames v
+         JOIN files f ON f.path = v.file_path WHERE v.ocr <> ''"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT f.name, f.path, f.mtime, o.text, NULL FROM ocr_text o
+         JOIN files f ON f.path = o.file_path WHERE o.text <> '' {frames}"
+    );
     let rows = conn
-        .prepare(
-            "SELECT f.name, f.path, f.mtime, o.text FROM ocr_text o
-             JOIN files f ON f.path = o.file_path WHERE o.text <> ''",
-        )
+        .prepare(&sql)
         .and_then(|mut stmt| {
             stmt.query_map([], |row| {
                 Ok(OcrDoc {
@@ -61,6 +71,7 @@ fn load_docs(conn: &Connection) -> Vec<OcrDoc> {
                     mtime: row.get(2)?,
                     // stored lowercased (see index.rs)
                     words: words(&row.get::<_, String>(3)?),
+                    t_sec: row.get(4)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()
@@ -72,7 +83,7 @@ fn load_docs(conn: &Connection) -> Vec<OcrDoc> {
 }
 
 pub(super) fn reload(conn: &Connection) {
-    *DOCS.lock().unwrap() = load_docs(conn);
+    *DOCS.lock().unwrap() = load_docs(conn, super::index::VIDEO.get().is_some());
     LOADED.store(true, Ordering::Release);
 }
 
@@ -105,7 +116,8 @@ fn percent(doc_words: &[Vec<char>], query: &[Vec<char>]) -> i32 {
     ((total + query.len() / 2) / query.len()).max(1) as i32
 }
 
-fn search(docs: &[OcrDoc], query: &str) -> Vec<(FileEntry, i32)> {
+// One hit per file: a video counts as its best frame.
+fn search(docs: &[OcrDoc], query: &str) -> Vec<(FileEntry, i32, Option<f64>)> {
     let query: Vec<Vec<char>> = words(&query.to_lowercase())
         .into_iter()
         .filter(|w| w.len() >= MIN_WORD_CHARS)
@@ -123,7 +135,10 @@ fn search(docs: &[OcrDoc], query: &str) -> Vec<(FileEntry, i32)> {
         b.0.cmp(&a.0)
             .then_with(|| b.1.mtime.cmp(&a.1.mtime))
             .then_with(|| a.1.path.cmp(&b.1.path))
+            .then_with(|| a.1.t_sec.partial_cmp(&b.1.t_sec).unwrap_or(std::cmp::Ordering::Equal))
     });
+    let mut seen = std::collections::HashSet::new();
+    scored.retain(|(_, d)| seen.insert(d.path.as_str()));
     scored
         .into_iter()
         .take(MAX_HITS)
@@ -137,15 +152,17 @@ fn search(docs: &[OcrDoc], query: &str) -> Vec<(FileEntry, i32)> {
                     mtime: d.mtime,
                 },
                 p,
+                d.t_sec,
             )
         })
         .collect()
 }
 
-/// Images whose recognized text fuzzy-matches the query, with how well the
-/// query matched (0-100, see `percent`) for the UI badge. Best first.
+/// Images and videos whose recognized text fuzzy-matches the query, with how
+/// well the query matched (0-100, see `percent`) for the UI badge. Best first.
+/// Video hits carry the second of their best frame, images None.
 /// Empty until the indexing worker has loaded the snapshot.
-pub fn ocr_search(query: &str) -> Vec<(FileEntry, i32)> {
+pub fn ocr_search(query: &str) -> Vec<(FileEntry, i32, Option<f64>)> {
     search(&DOCS.lock().unwrap(), query)
 }
 
@@ -154,11 +171,11 @@ mod tests {
     use super::*;
 
     fn doc(path: &str, mtime: i64, text: &str) -> OcrDoc {
-        OcrDoc { name: path.rsplit('/').next().unwrap().into(), path: path.into(), mtime, words: words(text) }
+        OcrDoc { name: path.rsplit('/').next().unwrap().into(), path: path.into(), mtime, words: words(text), t_sec: None }
     }
 
-    fn found(hits: &[(FileEntry, i32)]) -> Vec<(&str, i32)> {
-        hits.iter().map(|(f, p)| (f.path.as_str(), *p)).collect()
+    fn found(hits: &[(FileEntry, i32, Option<f64>)]) -> Vec<(&str, i32)> {
+        hits.iter().map(|(f, p, _)| (f.path.as_str(), *p)).collect()
     }
 
     #[test]
@@ -233,10 +250,41 @@ mod tests {
         )
         .unwrap();
 
-        let docs = load_docs(&conn);
+        let docs = load_docs(&conn, false);
 
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].path, "/d/a.png");
         assert_eq!(docs[0].words.len(), 3); // hello, world, 100
+    }
+
+    #[test]
+    fn video_frames_load_when_video_is_on() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE files (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE, mtime INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE ocr_text (file_path TEXT PRIMARY KEY, mtime INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL);
+            CREATE TABLE video_frames (file_path TEXT NOT NULL, t_sec REAL NOT NULL, vec BLOB, ocr TEXT, PRIMARY KEY (file_path, t_sec));
+            INSERT INTO files (name, path, mtime) VALUES ('a.mp4', '/v/a.mp4', 3);
+            INSERT INTO video_frames VALUES ('/v/a.mp4', 5.0, NULL, 'error dialog'), ('/v/a.mp4', 15.0, x'00', NULL),
+                ('/v/a.mp4', 25.0, NULL, ''), ('/gone.mp4', 5.0, NULL, 'ghost');
+            "#,
+        )
+        .unwrap();
+
+        assert!(load_docs(&conn, false).is_empty());
+        let docs = load_docs(&conn, true);
+        assert_eq!(docs.len(), 1);
+        assert_eq!((docs[0].path.as_str(), docs[0].t_sec), ("/v/a.mp4", Some(5.0)));
+    }
+
+    #[test]
+    fn video_is_its_best_frame() {
+        let frame = |t, text| OcrDoc { t_sec: Some(t), ..doc("/v/a.mp4", 1, text) };
+        let docs = [frame(5.0, "invoices"), frame(15.0, "invoice"), frame(25.0, "invoice")];
+        let hits = search(&docs, "invoice");
+        // one hit, the earliest of the equally good frames
+        assert_eq!(hits.len(), 1);
+        assert_eq!((hits[0].1, hits[0].2), (100, Some(15.0)));
     }
 }

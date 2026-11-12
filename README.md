@@ -154,23 +154,25 @@ codex mcp add luma -- luma mcp
 and set `"agent_api": true` in `~/.config/luma/settings.json` (no restart needed). The API
 is off by default.
 
-The server offers three tools: `luma_search_images` (what the picture shows, English
-queries), `luma_search_text` (words written on it, English text) and
-`luma_find_similar_images` (photos that look like a given image file). Each returns the
-best matches with a 0–100 score.
+The server offers four tools: `luma_search_images` (what the picture shows, English
+queries), `luma_search_text` (words written on it, English text), `luma_search_videos`
+(a video and the second in it: what is shown, written or said) and
+`luma_find_similar_images` (photos that look like a given image file). Each returns the best
+matches with a 0–100 score; a video hit also has `source` (`frame`, `ocr` or `speech`),
+`t_sec` and, for speech, a `snippet`.
 
 **Requirements** — Luma must be running, and `semantic` (for images) and/or `ocr` (for
-text) must be on, with indexing done. Only folders in `search_dirs` are searched. With a
+text) must be on (for videos: `video` plus `semantic`, `ocr` and/or `video_speech`), with indexing done. Only folders in `search_dirs` are searched. With a
 search not ready the tool answers with a message saying what to enable.
 
-**Without MCP** — `luma query clip "river in fog"` and `luma query ocr "connection refused"`
-print one JSON line; `luma query similar /path/to/photo.jpg` finds photos like that one. [`agent/skills/luma/SKILL.md`](agent/skills/luma/SKILL.md) is a skill
+**Without MCP** — `luma query clip "river in fog"`, `luma query ocr "connection refused"` and
+`luma query video "the lease ends"` print one JSON line; `luma query similar /path/to/photo.jpg` finds photos like that one. [`agent/skills/luma/SKILL.md`](agent/skills/luma/SKILL.md) is a skill
 that teaches an agent to use them.
 
 ## Privacy
 
 Nothing leaves your machine except two things you can turn off: the model download
-(`semantic` / `ocr`, once) and exchange rates for `100 usd to eur` (`currency`, cached for
+(`semantic` / `ocr` / `video_speech`, once) and exchange rates for `100 usd to eur` (`currency`, cached for
 an hour). Photos, thumbnails, the index and agent queries stay local.
 
 ## Usage
@@ -189,8 +191,8 @@ an hour). Photos, thumbnails, the index and agent queries stay local.
 ## Configuration
 
 Edit settings in the launcher (`Alt+4` / `Ctrl+,`) or by hand in
-`~/.config/luma/settings.json`. Hand edits, `search_dirs`, `exclude_dirs`, `semantic`
-and `ocr` apply after a restart (the menu offers a Restart button); everything else
+`~/.config/luma/settings.json`. Hand edits, `search_dirs`, `exclude_dirs`, `semantic`,
+`ocr` and the `video*` options apply after a restart (the menu offers a Restart button); everything else
 applies at once. New options are appended with their defaults; a broken file
 falls back to defaults and is kept.
 
@@ -203,11 +205,14 @@ falls back to defaults and is kept.
 | `semantic` | `false` | Photo search by meaning (CLIP, English queries). Downloads ~154 MB of models, indexes photos in the background |
 | `ocr` | `false` | Image search by the text on them (PaddleOCR, English). Downloads ~12 MB of models, runs after semantic indexing |
 | `docs` | `false` | Search inside document contents (txt, md, pdf, docx…). Text goes into the local db. Limits `docs_max_file_mb`, `docs_max_text_kb`, `docs_max_pdf_pages` are tunable in settings.json |
+| `video` | `false` | Search inside videos (mp4, mkv, webm, avi, mov) by a few frames per video: by meaning with `semantic`, by on-screen text with `ocr`. Needs `ffmpeg` and `ffprobe` in `PATH`. `video_frame_every_sec` (10) and `video_max_frames` (32, at least 4 are taken) set the sampling. A hit shows the time in the video, e.g. `at 1:42` |
+| `video_speech` | `false` | Also search what is said in videos (needs `video`): Moonshine base speech recognition, English only. Downloads ~66 MB, the heaviest indexing step, runs after `semantic` and `ocr`. Videos longer than `video_speech_max_min` (60) minutes are skipped. Hits show the time and the words around the match |
 | `agent_api` | `false` | Lets agents query Luma (`luma mcp`, `luma query`). Set by Settings → Agents |
 | `currency` | `true` | `100 usd to eur` via open.er-api.com, rates cached for an hour. `false` = no network; the calculator still works |
 
-`semantic` and `ocr` cost nothing while off; turning them off keeps the models
-and index on disk for later.
+`semantic`, `ocr` and `video_speech` cost nothing while off; turning them off keeps
+the models on disk for later. Turning `video` off drops the video index; `video_speech`
+off drops the recognized speech.
 
 Where things live (`$XDG_CONFIG_HOME` / `$XDG_CACHE_HOME` respected):
 `~/.config/luma/` — settings, `main.sqlite3`, `models/`;
@@ -227,6 +232,11 @@ Full example (the defaults):
   "semantic": false,
   "ocr": false,
   "docs": false,
+  "video": false,
+  "video_frame_every_sec": 10,
+  "video_max_frames": 32,
+  "video_speech": false,
+  "video_speech_max_min": 60,
   "agent_api": false,
   "currency": true
 }
@@ -260,6 +270,7 @@ Light:
 ## Requirements
 
 - Linux (glibc 2.39+ — Ubuntu 24.04, Fedora 40+, Arch; the ONNX runtime of the semantic search sets this floor)
+- `ffmpeg` and `ffprobe` in `PATH` for video search (`video`); everything else works without them
 - The prebuilt binary links at runtime against libfontconfig, libGL (mesa) and libxkbcommon
 - Power menu uses systemd: `systemctl poweroff|reboot|suspend`; lock is `loginctl lock-session`, so a locker must listen for it (e.g. hypridle with `lock_cmd`)
 

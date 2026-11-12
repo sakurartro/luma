@@ -6,6 +6,7 @@ mod search;
 
 pub use extract::is_doc;
 pub use search::docs_search;
+pub(crate) use search::fts_query;
 pub use index::{docs_enabled, schedule_reindex, start_indexing, DOCS_DONE, DOCS_TOTAL};
 
 use rusqlite::Connection;

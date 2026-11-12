@@ -13,13 +13,13 @@ use std::thread;
 
 use super::Ctx;
 
-// search_dirs / semantic / ocr / docs (and its limits) / exclude_dirs as the watcher and indexers got
+// search_dirs / semantic / ocr / docs (and its limits) / exclude_dirs / video (and its limits) as the watcher and indexers got
 // them at startup; they can't be reconfigured live, so a difference asks for a restart.
-type StartValues = (Vec<String>, bool, bool, bool, Vec<String>, (u64, usize, u32));
+type StartValues = (Vec<String>, bool, bool, bool, Vec<String>, (u64, usize, u32), (bool, u32, u32, bool, u32));
 static STARTED_WITH: OnceLock<StartValues> = OnceLock::new();
 
 fn restart_values(st: &Settings) -> StartValues {
-    (st.search_dirs.clone(), st.semantic, st.ocr, st.docs, st.exclude_dirs.clone(), (st.docs_max_file_mb, st.docs_max_text_kb, st.docs_max_pdf_pages))
+    (st.search_dirs.clone(), st.semantic, st.ocr, st.docs, st.exclude_dirs.clone(), (st.docs_max_file_mb, st.docs_max_text_kb, st.docs_max_pdf_pages), (st.video, st.video_frame_every_sec, st.video_max_frames, st.video_speech, st.video_speech_max_min))
 }
 
 pub fn remember_startup(st: &Settings) {
@@ -48,6 +48,7 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ("Files", &["search_dirs", "hide_patterns", "exclude_dirs"]),
     ("Photos", &["semantic", "ocr"]),
     ("Documents", &["docs", "docs_max_file_mb", "docs_max_text_kb", "docs_max_pdf_pages"]),
+    ("Videos", &["video", "video_frame_every_sec", "video_max_frames", "video_speech", "video_speech_max_min"]),
     ("Calculator", &["currency"]),
 ];
 
@@ -57,7 +58,7 @@ const HIDDEN: &str = "agent_api";
 fn field(key: &str, value: &Value) -> Option<SettingField> {
     let mut field = SettingField {
         key: key.into(),
-        label: key.strip_prefix("docs_").unwrap_or(key).into(),
+        label: key.strip_prefix("docs_").or_else(|| key.strip_prefix("video_")).unwrap_or(key).into(),
         ..Default::default()
     };
     match value {
@@ -348,6 +349,16 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                     eprintln!("failed to clear document index: {err}");
                 }
             }
+            if key == "video" && matches!(&result, Ok(st) if !st.video) {
+                if let Err(err) = crate::backend::apps::db_init::open_conn().and_then(|c| crate::backend::files::video::clear(&c)) {
+                    eprintln!("failed to clear video index: {err}");
+                }
+            }
+            if key == "video_speech" && matches!(&result, Ok(st) if !st.video_speech) {
+                if let Err(err) = crate::backend::apps::db_init::open_conn().and_then(|c| crate::backend::files::video::clear_speech(&c)) {
+                    eprintln!("failed to clear speech index: {err}");
+                }
+            }
             if let Ok(st) = &result {
                 apply_settings(&window, st, &ctx);
                 window.invoke_refresh_view();
@@ -430,6 +441,14 @@ mod tests {
         let obj = serde_json::json!({"docs_max_pdf_pages": 30});
         let rows = fields(obj.as_object().unwrap());
         assert_eq!((rows[0].kind, rows[0].text.as_str(), rows[0].heading.as_str()), (2, "30", "Documents"));
+    }
+
+    #[test]
+    fn video_rows_have_short_labels() {
+        let obj = serde_json::json!({"video": false, "video_max_frames": 32});
+        let rows = fields(obj.as_object().unwrap());
+        let labels: Vec<_> = rows.iter().map(|r| (r.label.to_string(), r.heading.to_string())).collect();
+        assert_eq!(labels, [("video".into(), "Videos".into()), ("max_frames".into(), String::new())]);
     }
 
     #[test]

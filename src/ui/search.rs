@@ -4,6 +4,7 @@ use crate::backend::apps::fuzzy;
 use crate::backend::apps::watcher::APPS_CHANGED;
 use crate::backend::files::clip;
 use crate::backend::files::files_search;
+use crate::backend::files::video::{speech, speech_index};
 use crate::backend::files::{docs, ocr};
 use crate::backend::general_features::engine;
 use crate::{AppItem, FileItem, MainWindow};
@@ -39,27 +40,39 @@ pub fn update_index_progress(window: &MainWindow) {
     update_model_progress(window);
 }
 
-// Model download / photo / document indexing banner (clip, ocr, then docs), same polling
+// Model download / photo / video / document indexing banner (clip, ocr, then docs), same polling
 // style as above.
 fn update_model_progress(window: &MainWindow) {
     let dl_total = clip::DL_TOTAL.load(Ordering::Relaxed);
     let dl_done = clip::DL_DONE.load(Ordering::Relaxed);
     let total = clip::EMB_TOTAL.load(Ordering::Relaxed);
     let done = clip::EMB_DONE.load(Ordering::Relaxed);
+    let vid_total = clip::VID_TOTAL.load(Ordering::Relaxed);
+    let vid_done = clip::VID_DONE.load(Ordering::Relaxed);
     let ocr_dl_total = ocr::OCR_DL_TOTAL.load(Ordering::Relaxed);
     let ocr_dl_done = ocr::OCR_DL_DONE.load(Ordering::Relaxed);
     let ocr_total = ocr::OCR_TOTAL.load(Ordering::Relaxed);
     let ocr_done = ocr::OCR_DONE.load(Ordering::Relaxed);
+    let speech_dl_total = speech::SPEECH_DL_TOTAL.load(Ordering::Relaxed);
+    let speech_dl_done = speech::SPEECH_DL_DONE.load(Ordering::Relaxed);
+    let speech_total = speech_index::SPEECH_TOTAL.load(Ordering::Relaxed);
+    let speech_done = speech_index::SPEECH_DONE.load(Ordering::Relaxed);
     let docs_total = docs::DOCS_TOTAL.load(Ordering::Relaxed);
     let docs_done = docs::DOCS_DONE.load(Ordering::Relaxed);
     let (busy, label, percent) = if dl_total > 0 && dl_done < dl_total {
         (true, "Downloading models...", (dl_done.min(dl_total) * 100 / dl_total) as i32)
     } else if total > 0 && done < total {
         (true, "Indexing photos...", (done.min(total) * 100 / total) as i32)
+    } else if vid_total > 0 && vid_done < vid_total {
+        (true, "Indexing videos...", (vid_done.min(vid_total) * 100 / vid_total) as i32)
     } else if ocr_dl_total > 0 && ocr_dl_done < ocr_dl_total {
         (true, "Downloading OCR models...", (ocr_dl_done.min(ocr_dl_total) * 100 / ocr_dl_total) as i32)
     } else if ocr_total > 0 && ocr_done < ocr_total {
         (true, "Recognizing text...", (ocr_done.min(ocr_total) * 100 / ocr_total) as i32)
+    } else if speech_dl_total > 0 && speech_dl_done < speech_dl_total {
+        (true, "Downloading speech model...", (speech_dl_done.min(speech_dl_total) * 100 / speech_dl_total) as i32)
+    } else if speech_total > 0 && speech_done < speech_total {
+        (true, "Recognizing speech...", (speech_done.min(speech_total) * 100 / speech_total) as i32)
     } else if docs_total > 0 && docs_done < docs_total {
         (true, "Indexing docs...", (docs_done.min(docs_total) * 100 / docs_total) as i32)
     } else {
@@ -168,8 +181,10 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
                                             item
                                         }).collect();
                                     all.extend(window.get_files().iter().take(base_len));
-                                    all.extend(extra_items.into_iter().map(|(f, kind, score)| {
-                                        build_file_item(&f, kind, score)
+                                    all.extend(extra_items.into_iter().map(|(f, kind, score, snippet)| {
+                                        let mut item = build_file_item(&f, kind, score);
+                                        item.snippet = snippet.into();
+                                        item
                                     }));
                                     set_files(&window, all);
                                     window.set_searching(false);

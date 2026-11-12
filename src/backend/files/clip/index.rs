@@ -4,11 +4,14 @@
 use super::inference::{l2_normalize, models_dir, ClipModels, QueryModels};
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::files::download::ensure_models;
+use super::video;
 use crate::backend::files::files_search::{FileEntry, image_where, SCAN_COMPLETE};
+use crate::backend::files::video::frames::ffmpeg_available;
+use crate::backend::settings::Settings;
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 // Progress, same polling style as INDEX_* in files_search; no UI hook yet.
@@ -51,12 +54,14 @@ pub fn clip_ready() -> bool {
 
 // Embeddings + their files, snapshot taken once per startup after indexing.
 // Rebuilt after every indexing pass (see schedule_reindex). vec is l2-normalized.
+// A video has one entry per sampled frame, t_sec = where the frame is.
 pub struct CachedVec {
     path: String,
     name: String,
     name_lower: Vec<char>,
     mtime: i64,
     vec: Vec<f32>,
+    t_sec: Option<f64>,
 }
 pub static VECTORS: Mutex<Vec<CachedVec>> = Mutex::new(Vec::new());
 
@@ -107,7 +112,7 @@ fn percent(score: f32, min: f32, max: f32) -> i32 {
     (((score - min) / (max - min)) * 100.0).round().clamp(0.0, 100.0) as i32
 }
 
-fn vec_to_blob(v: &[f32]) -> Vec<u8> {
+pub(super) fn vec_to_blob(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
@@ -121,12 +126,19 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-// Snapshot of all clip embeddings joined with their file rows. Photos whose
-// file row vanished between scan and here are excluded by the JOIN.
+// Snapshot of all clip embeddings joined with their file rows, plus the
+// video frames when video search is on. Files whose row vanished between
+// scan and here are excluded by the JOIN.
 fn load_vectors(conn: &Connection) -> Vec<CachedVec> {
+    let frames = if VIDEO.get().is_some() {
+        "UNION ALL SELECT v.file_path, f.name, f.mtime, v.vec, v.t_sec FROM video_frames v
+         JOIN files f ON f.path = v.file_path WHERE v.vec IS NOT NULL"
+    } else {
+        ""
+    };
     let sql = format!(
-        "SELECT e.file_path, f.name, f.mtime, e.vec FROM embeddings e
-         JOIN files f ON f.path = e.file_path WHERE e.kind = '{KIND}'"
+        "SELECT e.file_path, f.name, f.mtime, e.vec, NULL FROM embeddings e
+         JOIN files f ON f.path = e.file_path WHERE e.kind = '{KIND}' {frames}"
     );
     let Ok(rows) = conn
         .prepare(&sql)
@@ -137,6 +149,7 @@ fn load_vectors(conn: &Connection) -> Vec<CachedVec> {
                     row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Option<f64>>(4)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()
@@ -146,7 +159,7 @@ fn load_vectors(conn: &Connection) -> Vec<CachedVec> {
         return Vec::new();
     };
     rows.into_iter()
-        .map(|(path, name, mtime, blob)| {
+        .map(|(path, name, mtime, blob, t_sec)| {
             let mut vec = blob_to_vec(&blob);
             l2_normalize(&mut vec);
             CachedVec {
@@ -155,9 +168,24 @@ fn load_vectors(conn: &Connection) -> Vec<CachedVec> {
                 name,
                 mtime,
                 vec,
+                t_sec,
             }
         })
         .collect()
+}
+
+// Entries scoring at least min_score, best first, one per file: a
+// video counts as its best frame.
+fn ranked<'a>(query: &[f32], vectors: &'a [CachedVec], min_score: f32) -> Vec<(f32, &'a CachedVec)> {
+    let mut scored: Vec<(f32, &CachedVec)> = vectors
+        .iter()
+        .map(|c| (dot(query, &c.vec), c))
+        .filter(|(score, _)| *score >= min_score)
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut seen = std::collections::HashSet::new();
+    scored.retain(|(_, c)| seen.insert(c.path.as_str()));
+    scored
 }
 
 /// Semantic photo search: embeds the query once (~10-50 ms), scores the
@@ -167,7 +195,8 @@ fn load_vectors(conn: &Connection) -> Vec<CachedVec> {
 /// scores for good matches stay below ~0.35).
 /// Empty when models are not loaded yet (still indexing / no models) or when
 /// a newer query (see next_query) arrived while this one waited for them.
-pub fn clip_search(query: &str, generation: u64) -> Vec<(FileEntry, i32)> {
+/// Video hits carry the second of their best frame, photos None.
+pub fn clip_search(query: &str, generation: u64) -> Vec<(FileEntry, i32, Option<f64>)> {
     let mut query_vec = {
         let mut guard = MODELS.lock().unwrap();
         if is_stale(generation) {
@@ -214,14 +243,16 @@ pub fn clip_similar(img: &image::DynamicImage, generation: u64) -> Vec<(FileEntr
         }
     };
     l2_normalize(&mut query_vec);
-    rank(&query_vec, SIMILAR_MIN_SCORE, SIMILAR_MAX_HITS, |s| {
-        percent(s, SIMILAR_MIN_SCORE, 1.0)
-    })
+    // photos only: a video frame has no place in "looks like this photo"
+    rank(&query_vec, SIMILAR_MIN_SCORE, SIMILAR_MAX_HITS, |s| percent(s, SIMILAR_MIN_SCORE, 1.0))
+        .into_iter()
+        .filter_map(|(f, score, t_sec)| t_sec.is_none().then_some((f, score)))
+        .collect()
 }
 
 // Scores the vector cache against a normalized query, best first, cut at
 // `min_score`/`max_hits`; `to_percent` maps cosine -> UI badge.
-fn rank(query_vec: &[f32], min_score: f32, max_hits: usize, to_percent: impl Fn(f32) -> i32) -> Vec<(FileEntry, i32)> {
+fn rank(query_vec: &[f32], min_score: f32, max_hits: usize, to_percent: impl Fn(f32) -> i32) -> Vec<(FileEntry, i32, Option<f64>)> {
     let vectors = VECTORS.lock().unwrap();
     rank_in(&vectors, query_vec, min_score, max_hits, to_percent)
 }
@@ -232,13 +263,9 @@ fn rank_in(
     min_score: f32,
     max_hits: usize,
     to_percent: impl Fn(f32) -> i32,
-) -> Vec<(FileEntry, i32)> {
-    let mut scored: Vec<(f32, &CachedVec)> =
-        vectors.iter().map(|c| (dot(query_vec, &c.vec), c)).collect();
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored
+) -> Vec<(FileEntry, i32, Option<f64>)> {
+    ranked(query_vec, vectors, min_score)
         .into_iter()
-        .filter(|(score, _)| *score >= min_score)
         // The snapshot outlives files deleted/renamed since it was built.
         .filter(|(_, c)| std::path::Path::new(&c.path).exists())
         .take(max_hits)
@@ -252,6 +279,7 @@ fn rank_in(
                     mtime: c.mtime,
                 },
                 to_percent(score),
+                c.t_sec,
             )
         })
         .collect()
@@ -313,14 +341,25 @@ impl Drop for SetDoneOnDrop {
     }
 }
 
+// (video_frame_every_sec, video_max_frames) when video frames get embedded:
+// `video` is on and ffmpeg was found. Set once by start_indexing.
+static VIDEO: OnceLock<(u32, u32)> = OnceLock::new();
+
 /// Start the indexing worker in the background; gated by the `semantic`
 /// setting (off = the feature costs nothing: no models, no RAM, no CPU).
 /// On first enable the models are downloaded from HuggingFace. Silently
 /// no-ops when the download fails or models/clip/ is broken.
-pub fn start_indexing(semantic: bool) {
-    if !semantic {
+pub fn start_indexing(st: &Settings) {
+    if !st.semantic {
         CLIP_DONE.store(true, Ordering::Release);
         return;
+    }
+    if st.video {
+        if ffmpeg_available() {
+            let _ = VIDEO.set((st.video_frame_every_sec, st.video_max_frames));
+        } else {
+            eprintln!("video search disabled: ffmpeg/ffprobe not found in PATH");
+        }
     }
     SEMANTIC_ON.store(true, Ordering::Relaxed);
     std::thread::spawn(|| index_pass(false));
@@ -333,7 +372,7 @@ static SEMANTIC_ON: AtomicBool = AtomicBool::new(false);
 static LAST_PHOTO_EVENT: Mutex<Option<Instant>> = Mutex::new(None);
 static REINDEX_PENDING: AtomicBool = AtomicBool::new(false);
 
-/// Called by the files watcher for a created/changed photo. After
+/// Called by the files watcher for a created/changed photo or video. After
 /// REINDEX_DELAY of quiet it runs one more indexing pass, which loads the
 /// models only if some photo lacks a fresh vector. No-op until the first
 /// pass has made the query models ready.
@@ -383,7 +422,8 @@ fn index_pass(rerun: bool) {
         image_where()
     );
     let total = conn.query_row(&total_sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
-    if rerun && total == 0 {
+    let videos = if VIDEO.get().is_some() { crate::backend::files::video::count_stale(&conn, "clip").unwrap_or(0) } else { 0 };
+    if rerun && total == 0 && videos == 0 {
         return;
     }
     let Some(mut models) = ClipModels::load() else { return };
@@ -391,6 +431,9 @@ fn index_pass(rerun: bool) {
     if SCAN_COMPLETE.load(Ordering::Relaxed) {
         if let Err(err) = delete_orphans(&conn) {
             eprintln!("clip orphan cleanup error: {err}");
+        }
+        if let Err(err) = crate::backend::files::video::delete_orphans(&conn) {
+            eprintln!("video orphan cleanup error: {err}");
         }
     }
 
@@ -413,6 +456,9 @@ fn index_pass(rerun: bool) {
         after = chunk.last().unwrap().0.clone();
     }
     EMB_DONE.store(EMB_TOTAL.load(Ordering::Relaxed), Ordering::Relaxed);
+    if let Some(&(every_sec, max_frames)) = VIDEO.get() {
+        video::index_videos(&mut models, &mut conn, every_sec, max_frames);
+    }
     // Models + vector snapshot go live only now: a query during indexing
     // would score an incomplete cache. into_query() drops the vision
     // session here, releasing its ORT arena back to the OS.
@@ -490,6 +536,27 @@ mod tests {
     }
 
     #[test]
+    fn video_counts_as_its_best_frame() {
+        let entry = |path: &str, vec: Vec<f32>, t_sec| CachedVec {
+            path: path.into(),
+            name: String::new(),
+            name_lower: Vec::new(),
+            mtime: 0,
+            vec,
+            t_sec,
+        };
+        let vectors = [
+            entry("/v/a.mp4", vec![0.6, 0.8], Some(5.0)),
+            entry("/p/b.jpg", vec![0.8, 0.6], None),
+            entry("/v/a.mp4", vec![1.0, 0.0], Some(15.0)),
+            entry("/p/c.jpg", vec![0.0, 1.0], None), // orthogonal: below the cutoff
+        ];
+        let hits: Vec<(&str, Option<f64>)> =
+            ranked(&[1.0, 0.0], &vectors, SEMANTIC_MIN_SCORE).iter().map(|(_, c)| (c.path.as_str(), c.t_sec)).collect();
+        assert_eq!(hits, [("/v/a.mp4", Some(15.0)), ("/p/b.jpg", None)]);
+    }
+
+    #[test]
     fn blob_roundtrip() {
         let vec: Vec<f32> = [0.0, -1.5, 3.25, f32::MIN_POSITIVE].into();
         assert_eq!(blob_to_vec(&vec_to_blob(&vec)), vec);
@@ -527,6 +594,7 @@ mod tests {
             name_lower: vec!['x'],
             mtime: 0,
             vec,
+            t_sec: None,
         };
         let vectors = [item(vec![0.0, 1.0]), item(vec![1.0, 0.0])];
         let hits = rank_in(&vectors, &[1.0, 0.0], SIMILAR_MIN_SCORE, 32, |s| percent(s, SIMILAR_MIN_SCORE, 1.0));

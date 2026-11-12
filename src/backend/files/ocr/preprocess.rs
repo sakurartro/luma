@@ -22,7 +22,7 @@ const REC_MIN_W: u32 = 16;
 // только от взрыва памяти на мусорных боксах.
 const REC_MAX_W: u32 = 2400;
 
-// Декод -> RGB-картинка + вход det [1,3,H,W] + масштаб (вход/исходник).
+// Декод файла -> то же, что preprocess_det_image.
 pub(super) fn preprocess_det(path: &Path) -> Result<(image::RgbImage, Array4<f32>, f32)> {
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_SIDE);
@@ -31,7 +31,11 @@ pub(super) fn preprocess_det(path: &Path) -> Result<(image::RgbImage, Array4<f32
     let mut reader = ImageReader::open(path).with_context(|| format!("open {}", path.display()))?;
     reader.limits(limits);
     let img = reader.decode().with_context(|| format!("decode {}", path.display()))?.to_rgb8();
+    Ok(preprocess_det_image(img))
+}
 
+// RGB-картинка (как есть) + вход det [1,3,H,W] + масштаб (вход/исходник).
+pub(super) fn preprocess_det_image(img: image::RgbImage) -> (image::RgbImage, Array4<f32>, f32) {
     // Ресайз: длинная сторона <= 960, короткая — с сохранением пропорций.
     let (w, h) = (img.width(), img.height());
     let scale = if w.max(h) > DET_LIMIT { DET_LIMIT as f32 / w.max(h) as f32 } else { 1.0 };
@@ -53,7 +57,7 @@ pub(super) fn preprocess_det(path: &Path) -> Result<(image::RgbImage, Array4<f32
             out[[0, c, y as usize, x as usize]] = (px[c] as f32 / 255.0 - MEAN[c]) / STD[c];
         }
     }
-    Ok((img, out, scale))
+    (img, out, scale)
 }
 
 // Кропы -> вход rec [N,3,48,Wmax] (каждый ужат/ дополнен до общей ширины
