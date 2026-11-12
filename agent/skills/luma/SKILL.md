@@ -83,6 +83,18 @@ luma query video --limit 10 "whiteboard with a diagram"
 Which one: what the picture **shows** → `clip`; what is **written** on it → `ocr`.
 If one finds nothing, try the other.
 
+## Search by another image
+
+The user has a picture and wants more like it:
+
+```bash
+luma query similar /path/to/photo.jpg
+luma query similar --limit 10 ./photo.jpg
+```
+
+Same output as above, best first, without the image itself. `[]` means nothing
+is similar enough. Needs `"semantic": true`, like `clip`.
+
 ## Check before you answer
 
 CLIP finds similar-looking images, not guaranteed matches.

@@ -388,6 +388,34 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
         }
     });
 
+    main_window.on_paste_image({
+        let weak = main_window.as_weak();
+        move || {
+            // Taken now: a text paste fires `edited` right after and supersedes this.
+            let generation = clip::next_query();
+            let weak = weak.clone();
+            std::thread::spawn(move || {
+                let Some(img) = clip::read_image() else { return };
+                let hits = clip::clip_similar(&img, generation);
+                let _ = weak.upgrade_in_event_loop(move |window| {
+                    if clip::is_stale(generation) {
+                        return;
+                    }
+                    if !matches!(window.get_mode(), 2 | 4) {
+                        window.invoke_activate_mode(2);
+                    }
+                    // the grid shows the home view while the input is empty
+                    window.set_input_text("similar to clipboard image".into());
+                    window.set_sel(0);
+                    set_files(
+                        &window,
+                        hits.iter().map(|(f, score)| build_file_item(f, clip::MATCH_SEMANTIC, *score)).collect(),
+                    );
+                });
+            });
+        }
+    });
+
     main_window.on_open_file(|file| {
         if let Err(err) = Command::new("xdg-open")
             .arg(file.path.as_str())
