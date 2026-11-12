@@ -47,10 +47,14 @@ fn main() -> Result<()> {
     // Bind the toggle socket before anything heavy: keybinds pressed while we
     // initialize then reach us instead of spawning duplicate instances.
     let listener = match toggle::bind_socket() {
-        Some(listener) => listener,
+        Ok(Some(listener)) => Some(listener),
         // A live instance appeared between notify_running() and the bind; it
         // owns the socket, so we step aside.
-        None => return Ok(()),
+        Ok(None) => return Ok(()),
+        Err(err) => {
+            eprintln!("toggle socket disabled ({}): {err}", toggle::socket_path().display());
+            None
+        }
     };
 
     // Open right away unless we were started by the service (systemd sets
@@ -167,6 +171,10 @@ fn main() -> Result<()> {
                         if let Err(err) = files_search::scan_dirs(&mut conn, &dirs, &st.exclude_dirs) {
                             eprintln!("file scan error: {err}");
                         }
+                        // settings.json may have been edited by hand while the app was off
+                        if let Err(err) = video::clear_disabled(&conn, st.video, st.video_speech) {
+                            eprintln!("failed to clear video index: {err}");
+                        }
                     }
                     Err(err) => eprintln!("failed to open db for file scan: {err}"),
                 }
@@ -190,9 +198,11 @@ fn main() -> Result<()> {
         TOGGLES.store(1, Ordering::Relaxed);
     }
 
-    toggle::start_listener(listener, || {
-        TOGGLES.fetch_add(1, Ordering::Relaxed);
-    });
+    if let Some(listener) = listener {
+        toggle::start_listener(listener, || {
+            TOGGLES.fetch_add(1, Ordering::Relaxed);
+        });
+    }
 
     // Poll toggle requests on the UI thread; the listener thread can't invoke
     // into the loop reliably before/around loop start, so no events are lost.

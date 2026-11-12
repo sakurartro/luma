@@ -20,6 +20,18 @@ pub fn clear_speech(conn: &Connection) -> anyhow::Result<()> {
     Ok(conn.execute_batch("DELETE FROM speech_fts; DELETE FROM video_meta WHERE kind = 'speech';")?)
 }
 
+/// Startup counterpart of the settings toggle: a setting switched off by hand-editing
+/// settings.json must drop its data too. Cheap when the tables are already empty.
+pub fn clear_disabled(conn: &Connection, video: bool, video_speech: bool) -> anyhow::Result<()> {
+    if !video {
+        clear(conn)
+    } else if !video_speech {
+        clear_speech(conn)
+    } else {
+        Ok(())
+    }
+}
+
 // Videos not processed by `kind` ('clip' | 'ocr') at their current mtime.
 fn stale_join() -> String {
     format!(
@@ -125,6 +137,29 @@ mod tests {
         .unwrap();
         clear(&conn).unwrap();
         let count = |t: &str| -> i64 { conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap() };
+        assert_eq!((count("video_meta"), count("video_frames"), count("speech_fts")), (0, 0, 0));
+    }
+
+    #[test]
+    fn clear_disabled_follows_settings() {
+        let conn = conn();
+        let fill = || {
+            conn.execute_batch(
+                "DELETE FROM video_meta; DELETE FROM video_frames; DELETE FROM speech_fts;
+                 INSERT INTO video_meta VALUES ('/v/a.mp4', 'clip', 1), ('/v/a.mp4', 'speech', 1);
+                 INSERT INTO video_frames VALUES ('/v/a.mp4', 5.0, x'00', NULL);
+                 INSERT INTO speech_fts VALUES ('/v/a.mp4', 5.0, 'hi');",
+            )
+            .unwrap();
+        };
+        let count = |t: &str| -> i64 { conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap() };
+        fill();
+        clear_disabled(&conn, true, true).unwrap();
+        assert_eq!((count("video_meta"), count("video_frames"), count("speech_fts")), (2, 1, 1));
+        clear_disabled(&conn, true, false).unwrap();
+        assert_eq!((count("video_meta"), count("video_frames"), count("speech_fts")), (1, 1, 0));
+        fill();
+        clear_disabled(&conn, false, true).unwrap();
         assert_eq!((count("video_meta"), count("video_frames"), count("speech_fts")), (0, 0, 0));
     }
 

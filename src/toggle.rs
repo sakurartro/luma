@@ -26,22 +26,23 @@ pub fn notify_running() -> bool {
 /// startup reach us instead of spawning duplicate instances. If the socket
 /// file exists, a successful connect means a live instance owns it (do not
 /// steal it), while a failed connect means it is stale and safe to rebind.
-/// None = a live instance is already running.
-pub fn bind_socket() -> Option<UnixListener> {
+/// Ok(None) = a live instance is already running; Err = the socket can't be
+/// bound (e.g. path longer than SUN_LEN), Luma then runs without it.
+pub fn bind_socket() -> std::io::Result<Option<UnixListener>> {
     let path = socket_path();
     let listener = match UnixListener::bind(&path) {
         Ok(listener) => listener,
         Err(_) => {
             if UnixStream::connect(&path).is_ok() {
-                return None;
+                return Ok(None);
             }
             let _ = std::fs::remove_file(&path);
-            UnixListener::bind(&path).expect("failed to bind toggle socket")
+            UnixListener::bind(&path)?
         }
     };
     // Search answers carry file paths; the /tmp fallback is reachable by other users.
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    Some(listener)
+    Ok(Some(listener))
 }
 
 pub fn start_listener(listener: UnixListener, on_toggle: impl Fn() + Send + 'static) {
