@@ -124,6 +124,11 @@ impl ClipModels {
         }
         out
     }
+
+    // Одна картинка (например, из буфера обмена): батч 1. Вектор не нормализован.
+    pub(crate) fn embed_image(&mut self, img: &image::DynamicImage) -> Result<Vec<f32>> {
+        Ok(run_images(&mut self.vision, &[preprocess_dynamic(img)])?.remove(0))
+    }
 }
 
 impl QueryModels {
@@ -137,6 +142,11 @@ impl QueryModels {
 
 /// Изображение -> [3,224,224] f32 (RGB, нормализация CLIP).
 fn preprocess_image(path: &Path) -> Result<Array3<f32>> {
+    Ok(preprocess_dynamic(&open_image(path)?))
+}
+
+/// Декодирует файл с лимитами (см. ниже); общий для индексации и поиска похожих.
+pub(crate) fn open_image(path: &Path) -> Result<image::DynamicImage> {
     // Декодинг ограничен: 224x224 на выходе, больше 4096 по стороне и 48 МБ
     // на буфер не нужно — это режет пиковую память декодинга.
     let mut limits = image::Limits::default();
@@ -146,9 +156,13 @@ fn preprocess_image(path: &Path) -> Result<Array3<f32>> {
     let mut reader = ImageReader::open(path)
         .with_context(|| format!("open {}", path.display()))?;
     reader.limits(limits);
-    let img = reader
+    reader
         .decode()
-        .with_context(|| format!("decode {}", path.display()))?;
+        .with_context(|| format!("decode {}", path.display()))
+}
+
+/// То же для уже декодированной картинки (например, из буфера обмена).
+fn preprocess_dynamic(img: &image::DynamicImage) -> Array3<f32> {
     let resized = image::imageops::resize(
         &img.to_rgb8(),
         IMAGE_SIZE as u32,
@@ -161,7 +175,7 @@ fn preprocess_image(path: &Path) -> Result<Array3<f32>> {
             out[[c, y as usize, x as usize]] = (px[c] as f32 / 255.0 - MEAN[c]) / STD[c];
         }
     }
-    Ok(out)
+    out
 }
 
 /// Текст -> input_ids [1,77] (BOS, токены, EOS, паддинг нулями).
@@ -226,4 +240,17 @@ fn run_images(session: &mut Session, imgs: &[Array3<f32>]) -> Result<Vec<Vec<f32
         rows.push(first_output_rows(outputs, 1)?.remove(0));
     }
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preprocess_dynamic_shape_and_norm() {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 4, image::Rgb([255, 255, 255])));
+        let t = preprocess_dynamic(&img);
+        assert_eq!(t.shape(), &[3, IMAGE_SIZE, IMAGE_SIZE]);
+        assert!((t[[0, 0, 0]] - (1.0 - MEAN[0]) / STD[0]).abs() < 1e-4);
+    }
 }

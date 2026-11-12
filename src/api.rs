@@ -19,6 +19,8 @@ pub enum Kind {
     Clip,
     /// The text written on the image (OCR).
     Ocr,
+    /// Images that look like the image at the given path (CLIP, image -> image).
+    Similar,
 }
 
 impl Kind {
@@ -27,13 +29,14 @@ impl Kind {
         match self {
             Kind::Clip => "clip ",
             Kind::Ocr => "ocr ",
+            Kind::Similar => "similar ",
         }
     }
 }
 
 /// `clip river in fog` → (Clip, "river in fog"); None = not a search, a toggle.
 pub fn parse_request(request: &str) -> Option<(Kind, &str)> {
-    [Kind::Clip, Kind::Ocr]
+    [Kind::Clip, Kind::Ocr, Kind::Similar]
         .into_iter()
         .find_map(|kind| Some((kind, request.strip_prefix(kind.prefix())?)))
 }
@@ -54,10 +57,18 @@ fn search_response(kind: Kind, query: &str, settings: &settings::Settings) -> St
     }
     let hits = match kind {
         // clip_search can't tell "no hits" from "not loaded": both are empty.
-        Kind::Clip if !clip::clip_ready() => {
+        Kind::Clip | Kind::Similar if !clip::clip_ready() => {
             return error("semantic search is not available: enable \"semantic\" in settings.json or wait for indexing to finish");
         }
         Kind::Clip => clip::clip_search(query, clip::NEVER_STALE),
+        Kind::Similar => match clip::open_image(std::path::Path::new(query)) {
+            // the image itself is in the index and would always be the top hit
+            Ok(img) => clip::clip_similar(&img, clip::NEVER_STALE)
+                .into_iter()
+                .filter(|(f, _)| f.path != query)
+                .collect(),
+            Err(err) => return error(&format!("{err:#}")),
+        },
         // same for ocr_search before the first snapshot is loaded
         Kind::Ocr if !ocr::ocr_ready() => {
             return error("text search is not available: enable \"ocr\" in settings.json or wait for indexing to finish");
@@ -77,7 +88,7 @@ fn hits_json(hits: Vec<(FileEntry, i32)>, hide_patterns: &[String]) -> String {
     serde_json::Value::from(hits).to_string()
 }
 
-const USAGE: &str = "usage: luma query <clip|ocr> [--limit N] \"<query>\" (default limit 5)";
+const USAGE: &str = "usage: luma query <clip|ocr> [--limit N] \"<query>\" | luma query similar [--limit N] <image path> (default limit 5)";
 pub const DEFAULT_LIMIT: usize = 5;
 
 // Args after `query clip|ocr`: `--limit N` anywhere, the rest is the query.
@@ -106,7 +117,8 @@ pub fn run_query(args: &[String]) -> Result<()> {
     let kind = match args.first().map(String::as_str) {
         Some("clip") => Kind::Clip,
         Some("ocr") => Kind::Ocr,
-        Some(kind) => return Err(anyhow!("unknown search kind '{kind}' (available: clip, ocr)\n{USAGE}")),
+        Some("similar") => Kind::Similar,
+        Some(kind) => return Err(anyhow!("unknown search kind '{kind}' (available: clip, ocr, similar)\n{USAGE}")),
         None => return Err(anyhow!(USAGE)),
     };
     let (query, limit) = parse_args(&args[1..])?;
@@ -117,6 +129,14 @@ pub fn run_query(args: &[String]) -> Result<()> {
 /// Client side, shared by the CLI and MCP: the daemon's hits, best first, cut
 /// to `limit`; Err when Luma is not running or answers with an error.
 pub fn hits(kind: Kind, query: &str, limit: usize) -> Result<serde_json::Value> {
+    // The daemon's working directory is not the caller's.
+    let query = &match kind {
+        Kind::Similar => std::fs::canonicalize(query)
+            .map_err(|e| anyhow!("{query}: {e}"))?
+            .to_string_lossy()
+            .into_owned(),
+        _ => query.to_owned(),
+    };
     let mut stream =
         UnixStream::connect(socket_path()).map_err(|_| anyhow!("Luma is not running"))?;
     stream.write_all(format!("{}{query}", kind.prefix()).as_bytes())?;
@@ -146,7 +166,7 @@ mod tests {
 
     #[test]
     fn disabled_by_default() {
-        for kind in [Kind::Clip, Kind::Ocr] {
+        for kind in [Kind::Clip, Kind::Ocr, Kind::Similar] {
             let value = answer(kind, &settings::Settings::default());
             assert!(value["error"].as_str().unwrap().starts_with("agent API is disabled"));
         }
@@ -158,6 +178,8 @@ mod tests {
         let on = settings::Settings { agent_api: true, ..Default::default() };
         let clip = answer(Kind::Clip, &on);
         assert!(clip["error"].as_str().unwrap().starts_with("semantic search is not available"));
+        let similar = answer(Kind::Similar, &on);
+        assert!(similar["error"].as_str().unwrap().starts_with("semantic search is not available"));
         let ocr = answer(Kind::Ocr, &on);
         assert!(ocr["error"].as_str().unwrap().starts_with("text search is not available"));
     }
@@ -166,6 +188,7 @@ mod tests {
     fn requests_are_told_apart_by_prefix() {
         assert_eq!(parse_request("clip river in fog"), Some((Kind::Clip, "river in fog")));
         assert_eq!(parse_request("ocr connection refused"), Some((Kind::Ocr, "connection refused")));
+        assert_eq!(parse_request("similar /tmp/a b.png"), Some((Kind::Similar, "/tmp/a b.png")));
         assert_eq!(parse_request("toggle"), None);
         // a word that merely starts like a prefix is a toggle
         assert_eq!(parse_request("clipboard"), None);

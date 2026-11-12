@@ -31,6 +31,8 @@ export component MainWindow inherits Window {
     callback search_apps(query: string);
     callback search_files(query: string);
     callback search_all(query: string);
+    // Ctrl+V: if the clipboard holds an image, search for similar files
+    callback paste-image();
     callback filter_category(string);
     callback run_query(string);
     callback power-action(string);
@@ -108,7 +110,7 @@ export component MainWindow inherits Window {
         root.sel = max(0, min(root.sel-len - 1, root.sel + d));
     }
 
-    function activate-mode(m: int) {
+    public function activate-mode(m: int) {
         // power mode starts with nothing selected: a stray Enter must not power off
         root.sel = m == 3 && root.mode != 3 ? -1 : 0;
         if root.mode == m {
@@ -266,6 +268,10 @@ export component MainWindow inherits Window {
                                 if (event.modifiers.alt && event.text == "4") || (event.modifiers.control && event.text == ",") {
                                     root.activate-mode(5);
                                     return accept;
+                                }
+                                if event.modifiers.control && event.text == "v" {
+                                    // async; text pasting below still happens for a text clipboard
+                                    root.paste-image();
                                 }
                                 if event.text == Key.DownArrow || event.text == Key.UpArrow {
                                     root.move-sel((event.text == Key.DownArrow ? 1 : -1) * (root.mode == 1 || root.mode == 2 || root.mode == 4 ? root.cols : 1));
