@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::backend::apps::db_init::config_dir;
 
 #[derive(serde::Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub bg: String,
     pub surface: String,
@@ -279,6 +280,14 @@ mod tests {
     fn template_includes_semantic() {
         let json = serde_json::to_string(&Settings::default()).unwrap();
         assert!(json.contains(r#""semantic":false"#));
+    }
+
+    #[test]
+    fn partial_file_falls_back_to_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"video": true}"#).unwrap();
+        assert!(s.video);
+        assert_eq!(s.bg, Settings::default().bg);
+        assert_eq!(s.search_dirs, default_search_dirs());
     }
 
     #[test]
