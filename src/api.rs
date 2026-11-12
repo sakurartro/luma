@@ -4,6 +4,7 @@
 
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::files::files_search::FileEntry;
+use crate::backend::files::video::frames::ffmpeg_available;
 use crate::backend::files::video::speech_index::speech_enabled;
 use crate::backend::files::video::speech_search::{speech_search, SpeechHit};
 use crate::backend::files::{clip, ocr};
@@ -89,6 +90,9 @@ const MAX_HITS: usize = 32;
 fn video_response(query: &str, settings: &settings::Settings) -> String {
     if !settings.video {
         return error("video search is disabled: set \"video\": true in ~/.config/luma/settings.json and restart Luma");
+    }
+    if !ffmpeg_available() {
+        return error("video search is not available: ffmpeg/ffprobe not found in PATH, install ffmpeg and restart Luma");
     }
     let (frames_on, ocr_on, speech_on) = (clip::clip_ready(), ocr::ocr_ready(), speech_enabled());
     if !(frames_on || ocr_on || speech_on) {
