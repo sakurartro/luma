@@ -4,7 +4,7 @@
 // softmax [N,T,C] (или [T,N,C]), CTC-декод (blank = класс 0).
 
 use super::postprocess::{ctc_decode, find_boxes};
-use super::preprocess::{crop_boxes, preprocess_det, preprocess_rec_batch};
+use super::preprocess::{crop_boxes, preprocess_det, preprocess_det_image, preprocess_rec_batch};
 use anyhow::{anyhow, Result};
 use ndarray::Array4;
 use ort::session::builder::GraphOptimizationLevel;
@@ -76,6 +76,16 @@ impl OcrModels {
     // вниз. Ошибку отдаёт наверх (воркер решает, ретраить ли).
     pub(crate) fn recognize(&mut self, path: &Path) -> Result<String> {
         let (img, det_input, scale) = preprocess_det(path)?;
+        self.recognize_prepared(img, det_input, scale)
+    }
+
+    // То же для кадра видео, уже декодированного в памяти.
+    pub(crate) fn recognize_image(&mut self, img: image::RgbImage) -> Result<String> {
+        let (img, det_input, scale) = preprocess_det_image(img);
+        self.recognize_prepared(img, det_input, scale)
+    }
+
+    fn recognize_prepared(&mut self, img: image::RgbImage, det_input: Array4<f32>, scale: f32) -> Result<String> {
         let (probs, dh, dw) = self.run_det(det_input)?;
         let crops = crop_boxes(&img, &find_boxes(&probs, dh, dw), scale);
         if crops.is_empty() {

@@ -31,6 +31,8 @@ export component MainWindow inherits Window {
     callback search_apps(query: string);
     callback search_files(query: string);
     callback search_all(query: string);
+    // Ctrl+V: if the clipboard holds an image, search for similar files
+    callback paste-image();
     callback filter_category(string);
     callback run_query(string);
     callback power-action(string);
@@ -108,7 +110,7 @@ export component MainWindow inherits Window {
         root.sel = max(0, min(root.sel-len - 1, root.sel + d));
     }
 
-    function activate-mode(m: int) {
+    public function activate-mode(m: int) {
         // power mode starts with nothing selected: a stray Enter must not power off
         root.sel = m == 3 && root.mode != 3 ? -1 : 0;
         if root.mode == m {
@@ -165,6 +167,9 @@ export component MainWindow inherits Window {
     }
     in-out property <string> query-result;
     in-out property <string> input-text;
+    // small preview of the pasted image, shown over the marker text in the search box
+    in-out property <image> paste-thumb;
+    in-out property <bool> has-paste-thumb: false;
     in-out property <bool> indexing: false;
     in-out property <int> index-percent: 0;
     in-out property <bool> clip-busy: false;
@@ -248,7 +253,7 @@ export component MainWindow inherits Window {
                         search-input := TextInput {
                             text <=> root.input-text;
                             font-size: 17px;
-                            color: Theme.text;
+                            color: root.has-paste-thumb ? transparent : Theme.text;
                             vertical-alignment: center;
                             key-pressed(event) => {
                                 if event.modifiers.alt && event.text == "1" {
@@ -267,6 +272,10 @@ export component MainWindow inherits Window {
                                     root.activate-mode(5);
                                     return accept;
                                 }
+                                if event.modifiers.control && event.text == "v" {
+                                    // async; text pasting below still happens for a text clipboard
+                                    root.paste-image();
+                                }
                                 if event.text == Key.DownArrow || event.text == Key.UpArrow {
                                     root.move-sel((event.text == Key.DownArrow ? 1 : -1) * (root.mode == 1 || root.mode == 2 || root.mode == 4 ? root.cols : 1));
                                     return accept;
@@ -279,6 +288,11 @@ export component MainWindow inherits Window {
                                 return reject;
                             }
                             edited => {
+                                // any edit drops the preview together with its marker text
+                                if root.has-paste-thumb {
+                                    root.has-paste-thumb = false;
+                                    self.text = "";
+                                }
                                 root.sel = root.mode == 3 ? -1 : 0;
                                 if root.mode == 0 && self.text != "" {
                                     root.search_all(self.text);
@@ -336,6 +350,15 @@ if root.input-text == "": Text {
                         font-size: 17px;
                         vertical-alignment: center;
                     }
+                    }
+
+                    if root.has-paste-thumb: Image {
+                        source: root.paste-thumb;
+                        x: 42px;
+                        y: 8px;
+                        height: parent.height - 16px;
+                        width: 80px;
+                        image-fit: contain;
                     }
                 }
 

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::backend::apps::db_init::config_dir;
 
 #[derive(serde::Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub bg: String,
     pub surface: String,
@@ -45,6 +46,23 @@ pub struct Settings {
     pub docs_max_text_kb: usize,
     #[serde(default = "default_max_pdf_pages")]
     pub docs_max_pdf_pages: u32,
+    // Search inside videos by their frames (CLIP when `semantic`, later OCR);
+    // off by default, needs ffmpeg in PATH.
+    #[serde(default)]
+    pub video: bool,
+    // One frame every video_frame_every_sec seconds, at most video_max_frames
+    // per video. Apply after a restart.
+    #[serde(default = "default_video_frame_every_sec")]
+    pub video_frame_every_sec: u32,
+    #[serde(default = "default_video_max_frames")]
+    pub video_max_frames: u32,
+    // Speech recognition in video audio (needs `video`); off by default, the
+    // most expensive part. Videos longer than video_speech_max_min minutes are
+    // skipped (their frames are still indexed). Apply after a restart.
+    #[serde(default)]
+    pub video_speech: bool,
+    #[serde(default = "default_video_speech_max_min")]
+    pub video_speech_max_min: u32,
     // Local API for AI agents (`luma query`, MCP); off by default.
     #[serde(default)]
     pub agent_api: bool,
@@ -64,6 +82,18 @@ fn default_max_text_kb() -> usize {
 
 fn default_max_pdf_pages() -> u32 {
     30
+}
+
+fn default_video_frame_every_sec() -> u32 {
+    10
+}
+
+fn default_video_max_frames() -> u32 {
+    32
+}
+
+fn default_video_speech_max_min() -> u32 {
+    60
 }
 
 fn default_currency() -> bool {
@@ -102,6 +132,11 @@ impl Default for Settings {
             docs_max_file_mb: default_max_file_mb(),
             docs_max_text_kb: default_max_text_kb(),
             docs_max_pdf_pages: default_max_pdf_pages(),
+            video: false,
+            video_frame_every_sec: default_video_frame_every_sec(),
+            video_max_frames: default_video_max_frames(),
+            video_speech: false,
+            video_speech_max_min: default_video_speech_max_min(),
             agent_api: false,
             currency: default_currency(),
         }
@@ -248,6 +283,14 @@ mod tests {
     }
 
     #[test]
+    fn partial_file_falls_back_to_defaults() {
+        let s: Settings = serde_json::from_str(r#"{"video": true}"#).unwrap();
+        assert!(s.video);
+        assert_eq!(s.bg, Settings::default().bg);
+        assert_eq!(s.search_dirs, default_search_dirs());
+    }
+
+    #[test]
     fn missing_fields_are_added_and_user_values_kept() {
         let text = r##"{"bg": "#111111", "surface": "#000000", "hover": "#000000", "selected": "#000000",
             "border": "#000000", "accent": "#000000", "text": "#000000", "text_dim": "#000000",
@@ -344,6 +387,16 @@ mod tests {
         assert!(json.contains(r#""docs_max_file_mb":10"#));
         assert!(json.contains(r#""docs_max_text_kb":256"#));
         assert!(json.contains(r#""docs_max_pdf_pages":30"#));
+    }
+
+    #[test]
+    fn template_includes_video_off_and_limits() {
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains(r#""video":false"#));
+        assert!(json.contains(r#""video_frame_every_sec":10"#));
+        assert!(json.contains(r#""video_max_frames":32"#));
+        assert!(json.contains(r#""video_speech":false"#));
+        assert!(json.contains(r#""video_speech_max_min":60"#));
     }
 
     #[test]

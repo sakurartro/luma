@@ -12,7 +12,7 @@ path = "src/main.rs"
 walkdir = "2"
 anyhow = "1"
 slint = { version = "1.18.1", features = ["unstable-winit-030"] }
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.41.0", features = ["bundled"] }
 notify = "8"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 # sha256 of downloaded models (src/backend/files/download.rs)
@@ -26,6 +26,8 @@ evalexpr = "13"
 ort = "2.0.0-rc.14"
 ndarray = "0.17"
 image = "0.25"
+# буфер обмена: картинка для поиска похожих
+arboard = { version = "3.7", features = ["wayland-data-control"] }
 tokenizers = "0.21"
 # malloc_trim: вернуть ОС страницы, освобождённые дропом vision-сессии
 libc = "0.2"

@@ -39,9 +39,10 @@ pub(crate) struct ClipModels {
     tokenizer: Tokenizer,
 }
 
-// What survives indexing: queries need only the text side; the vision
-// session is dropped after indexing so its ORT arena is freed.
+// What survives indexing and stays loaded while clip is on: the text side for
+// text queries and the vision side for image-to-image (clipboard) queries.
 pub(crate) struct QueryModels {
+    vision: Session,
     text: Session,
     tokenizer: Tokenizer,
 }
@@ -89,10 +90,9 @@ impl ClipModels {
         Some(ClipModels { vision, text, tokenizer })
     }
 
-    // End of the indexing worker: consume the full pair, drop the vision
-    // session (its arena is the memory hog) and keep only the query side.
+    // End of the indexing worker: the sessions stay resident for queries.
     pub(crate) fn into_query(self) -> QueryModels {
-        QueryModels { text: self.text, tokenizer: self.tokenizer }
+        QueryModels { vision: self.vision, text: self.text, tokenizer: self.tokenizer }
     }
 
     // None rows = failed images; they stay unindexed and are retried on the
@@ -124,9 +124,20 @@ impl ClipModels {
         }
         out
     }
+
+    // Video frames, already turned into tensors by image_tensor; one row
+    // per tensor. Callers keep groups at INFERENCE_BATCH.
+    pub(crate) fn embed_tensors(&mut self, tensors: &[Array3<f32>]) -> Result<Vec<Vec<f32>>> {
+        run_images(&mut self.vision, tensors)
+    }
 }
 
 impl QueryModels {
+    // Одна картинка (например, из буфера обмена): батч 1. Вектор не нормализован.
+    pub(crate) fn embed_image(&mut self, img: &image::DynamicImage) -> Result<Vec<f32>> {
+        Ok(run_images(&mut self.vision, &[image_tensor(img)])?.remove(0))
+    }
+
     // Kept hot in the MODELS mutex; clip_search calls it per query.
     pub(crate) fn embed_text(&mut self, text: &str) -> Result<Vec<f32>> {
         let ids = tokenize_text(&self.tokenizer, text)?;
@@ -137,6 +148,11 @@ impl QueryModels {
 
 /// Изображение -> [3,224,224] f32 (RGB, нормализация CLIP).
 fn preprocess_image(path: &Path) -> Result<Array3<f32>> {
+    Ok(image_tensor(&open_image(path)?))
+}
+
+/// Декодирует файл с лимитами (см. ниже); общий для индексации и поиска похожих.
+pub(crate) fn open_image(path: &Path) -> Result<image::DynamicImage> {
     // Декодинг ограничен: 224x224 на выходе, больше 4096 по стороне и 48 МБ
     // на буфер не нужно — это режет пиковую память декодинга.
     let mut limits = image::Limits::default();
@@ -146,9 +162,13 @@ fn preprocess_image(path: &Path) -> Result<Array3<f32>> {
     let mut reader = ImageReader::open(path)
         .with_context(|| format!("open {}", path.display()))?;
     reader.limits(limits);
-    let img = reader
+    reader
         .decode()
-        .with_context(|| format!("decode {}", path.display()))?;
+        .with_context(|| format!("decode {}", path.display()))
+}
+
+/// Decoded image -> [3,224,224] f32 (RGB, CLIP normalization).
+pub(crate) fn image_tensor(img: &image::DynamicImage) -> Array3<f32> {
     let resized = image::imageops::resize(
         &img.to_rgb8(),
         IMAGE_SIZE as u32,
@@ -161,7 +181,7 @@ fn preprocess_image(path: &Path) -> Result<Array3<f32>> {
             out[[c, y as usize, x as usize]] = (px[c] as f32 / 255.0 - MEAN[c]) / STD[c];
         }
     }
-    Ok(out)
+    out
 }
 
 /// Текст -> input_ids [1,77] (BOS, токены, EOS, паддинг нулями).
@@ -226,4 +246,17 @@ fn run_images(session: &mut Session, imgs: &[Array3<f32>]) -> Result<Vec<Vec<f32
         rows.push(first_output_rows(outputs, 1)?.remove(0));
     }
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_tensor_shape_and_norm() {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 4, image::Rgb([255, 255, 255])));
+        let t = image_tensor(&img);
+        assert_eq!(t.shape(), &[3, IMAGE_SIZE, IMAGE_SIZE]);
+        assert!((t[[0, 0, 0]] - (1.0 - MEAN[0]) / STD[0]).abs() < 1e-4);
+    }
 }

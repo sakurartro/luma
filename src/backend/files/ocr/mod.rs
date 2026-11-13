@@ -7,6 +7,7 @@ mod inference;
 mod postprocess;
 mod preprocess;
 mod search;
+mod video;
 
-pub use index::{schedule_reindex, start_indexing, OCR_DL_DONE, OCR_DL_TOTAL, OCR_DONE, OCR_TOTAL};
+pub use index::{schedule_reindex, start_indexing, OCR_DL_DONE, OCR_DL_TOTAL, OCR_DONE, OCR_PASS_DONE, OCR_TOTAL};
 pub use search::{ocr_ready, ocr_search, MATCH_OCR};
