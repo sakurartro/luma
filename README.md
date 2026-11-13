@@ -6,7 +6,7 @@
 
 **Smart launcher for you, and your AI agent**
 
-A Linux launcher that finds apps, files — and photos by what's in them. The same
+A Linux launcher that finds apps, files, photos and videos — by what's in them. The same
 index is open to AI agents: ask one for "the photo of a bear" and it finds it in seconds.
 
 [![CI](https://github.com/sakurartro/luma/actions/workflows/ci.yml/badge.svg)](https://github.com/sakurartro/luma/actions/workflows/ci.yml)
@@ -113,6 +113,8 @@ Transparency on X11 requires a compositor — GNOME and KDE ship one by default.
 - Semantic photo search (CLIP) — opt-in; matching files show a `S(N%)` match-strength badge
 - Text-in-image search (OCR) — opt-in; matching files show a `T(N%)` badge
 - Full-text search inside documents (txt, md, pdf, docx…) — opt-in; matches show a snippet of the text
+- Video search — opt-in; finds a video by what is shown, written or said in it, and the hit shows the time (`at 1:42`)
+- Similar images — paste an image with `Ctrl+V` and get look-alike photos; a thumbnail of it shows in the search box
 - Calculator (`2 + 2`) and currency conversion (`100 usd to eur`)
 
 **Apps**
@@ -131,7 +133,7 @@ Transparency on X11 requires a compositor — GNOME and KDE ship one by default.
 - Full name on hover when a label is truncated
 
 **For AI agents**
-- MCP server (`luma mcp`) and CLI (`luma query`) over the same photo and screenshot index — see [below](#for-ai-agents)
+- MCP server (`luma mcp`) and CLI (`luma query`) over the same photo, screenshot and video index — see [below](#for-ai-agents)
 - One-click connect for Claude Code, Codex and opencode in Settings → Agents
 
 **Local by default** — the index and the models stay on your machine; see [Privacy](#privacy).
@@ -185,6 +187,7 @@ an hour). Photos, thumbnails, the index and agent queries stay local.
 | `Alt+2` | Files |
 | `Alt+3` | Photos |
 | `Alt+4` / `Ctrl+,` | Settings |
+| `Ctrl+V` | Clipboard holds an image: search for similar files |
 | `Esc` | Hide the window |
 | Right click | Pin / unpin an app |
 
