@@ -19,11 +19,8 @@ concurrency:
 
 jobs:
   test:
-    # Same environment as release.yml: the prebuilt ONNX Runtime (ort-sys) needs glibc >= 2.38.
-    runs-on: ubuntu-24.04
-    env:
-      # Job-level so build, test and clippy share one cache (different RUSTFLAGS force a rebuild).
-      RUSTFLAGS: "-C link-args=-lstdc++"
+    # Same environment as release.yml (oldest supported glibc).
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +38,18 @@ jobs:
 
       - name: Build
         run: cargo build --locked --all-targets
+
+      # The binary must run on Ubuntu 22.04 / Linux Mint 21 (glibc 2.35). Weak symbols
+      # (pidfd_*) are optional and ignored. ldd in a clean 22.04 container catches missing libs.
+      - name: glibc floor (22.04)
+        run: |
+          max=$(objdump -T target/debug/luma | grep -v ' w ' | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "max glibc symbol: $max"
+          [ "$(printf '%s\nGLIBC_2.35\n' "$max" | sort -V | tail -1)" = GLIBC_2.35 ]
+          out=$(docker run --rm -v "$PWD/target/debug:/w:ro" ubuntu:22.04 sh -c \
+            'apt-get update -qq && apt-get install -y -qq libfontconfig1 libssl3 >/dev/null && ldd /w/luma' 2>&1)
+          echo "$out"
+          ! echo "$out" | grep -q "not found"
 
       # #[ignore] tests need downloaded ML models and stay skipped.
       - name: Test

@@ -6,9 +6,9 @@ on:
 
 jobs:
   build:
-    # 24.04, not 22.04: the prebuilt ONNX Runtime (ort-sys) needs glibc >= 2.38
-    # (__isoc23_* symbols), which 22.04's 2.35 linker cannot satisfy.
-    runs-on: ubuntu-24.04
+    # Oldest supported glibc (2.35, Mint 21 / Debian 12): the binary needs at most the
+    # glibc it was built against. ONNX Runtime is downloaded at runtime, not linked.
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
@@ -21,8 +21,6 @@ jobs:
             libnuma-dev libxkbcommon-dev libfontconfig1-dev libgl1-mesa-dev libxcb1-dev
 
       - name: Build release binary
-        env:
-          RUSTFLAGS: "-C link-args=-lstdc++"
         run: cargo build --release --locked
 
       - name: Rename artifact

@@ -173,7 +173,7 @@ that teaches an agent to use them.
 
 ## Privacy
 
-Nothing leaves your machine except two things you can turn off: the model download
+Nothing leaves your machine except two things you can turn off: the model and ONNX Runtime download
 (`semantic` / `ocr` / `video_speech`, once) and exchange rates for `100 usd to eur` (`currency`, cached for
 an hour). Photos, thumbnails, the index and agent queries stay local.
 
@@ -205,7 +205,7 @@ falls back to defaults and is kept.
 | `search_dirs` | `~/Documents` `~/Pictures` `~/Desktop` | Folders indexed for file search |
 | `hide_patterns` | `["."]` | File name prefixes to hide from results (dotfiles). Hidden files are still indexed; use `exclude_dirs` to keep a folder out of the index |
 | `exclude_dirs` | `[]` | Folders inside `search_dirs` that are never scanned, watched or fed to semantic/OCR indexing, e.g. `["~/Pictures/private"]` |
-| `semantic` | `false` | Photo search by meaning (CLIP, English queries). Downloads ~154 MB of models, indexes photos in the background |
+| `semantic` | `false` | Photo search by meaning (CLIP, English queries). Downloads ~154 MB of models plus the ONNX Runtime library (~23 MB, shared by `ocr` and `video_speech`), indexes photos in the background |
 | `ocr` | `false` | Image search by the text on them (PaddleOCR, English). Downloads ~12 MB of models, runs after semantic indexing |
 | `docs` | `false` | Search inside document contents (txt, md, pdf, docx…). Text goes into the local db. Limits `docs_max_file_mb`, `docs_max_text_kb`, `docs_max_pdf_pages` are tunable in settings.json |
 | `video` | `false` | Search inside videos (mp4, mkv, webm, avi, mov) by a few frames per video: by meaning with `semantic`, by on-screen text with `ocr`. Needs `ffmpeg` and `ffprobe` in `PATH`. `video_frame_every_sec` (10) and `video_max_frames` (32, at least 4 are taken) set the sampling. A hit shows the time in the video, e.g. `at 1:42` |
@@ -272,7 +272,7 @@ Light:
 
 ## Requirements
 
-- Linux (glibc 2.39+ — Ubuntu 24.04, Fedora 40+, Arch; the ONNX runtime of the semantic search sets this floor)
+- Linux (glibc 2.35+ — Ubuntu 22.04, Linux Mint 21, Debian 12, Fedora, Arch)
 - `ffmpeg` and `ffprobe` in `PATH` for video search (`video`); everything else works without them
 - The prebuilt binary links at runtime against libfontconfig, libGL (mesa) and libxkbcommon
 - Power menu uses systemd: `systemctl poweroff|reboot|suspend`; lock is `loginctl lock-session`, so a locker must listen for it (e.g. hypridle with `lock_cmd`)
