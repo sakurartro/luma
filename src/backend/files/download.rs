@@ -70,6 +70,54 @@ pub fn ensure_models(
     true
 }
 
+// ONNX Runtime is loaded at runtime (ort `load-dynamic`) instead of linked in:
+// pyke's static build needs glibc >= 2.38, Microsoft's wheel only 2.28. The
+// wheel is unpacked once; its tiny size beats a tar/gzip dependency.
+const ORT_WHEEL: &str = "onnxruntime-1.31.1-cp312-cp312-manylinux_2_28_x86_64.whl";
+const ORT_WHEEL_URL: &str = "https://files.pythonhosted.org/packages/eb/27/c6a823bac55b2977bea2027c3ec9393a2c1002cb9a09eb40354563e02730/onnxruntime-1.31.1-cp312-cp312-manylinux_2_28_x86_64.whl";
+const ORT_WHEEL_SHA: &str = "1f3dea47f2f0e5117c2404cea7d21fd253ae7836a3bf167a501cdfbb2600d536";
+const ORT_LIB: &str = "libonnxruntime.so.1.31.1";
+const ORT_LIB_SHA: &str = "fc44112fbe06d7d689c57e11d3862031f64711007e4ee020f8eed5185fd2c1d3";
+
+/// Path of the pinned `libonnxruntime.so` in `dir`, downloading and unpacking
+/// it first if missing or corrupted. None = no ONNX Runtime this session.
+pub fn ensure_ort_lib(dir: &Path) -> Option<PathBuf> {
+    let lib = dir.join(ORT_LIB);
+    if lib.exists() && verify(&lib, ORT_LIB_SHA) {
+        return Some(lib);
+    }
+    let (total, done) = (AtomicUsize::new(0), AtomicUsize::new(0));
+    if !ensure_models("ort", dir, &[(ORT_WHEEL, ORT_WHEEL_URL, ORT_WHEEL_SHA)], &total, &done) {
+        return None;
+    }
+    let wheel = dir.join(ORT_WHEEL);
+    let result = unpack_ort_lib(&wheel, &lib);
+    let _ = std::fs::remove_file(&wheel);
+    match result {
+        Ok(()) => Some(lib),
+        Err(err) => {
+            eprintln!("ort: unpacking {ORT_WHEEL} failed: {err}");
+            None
+        }
+    }
+}
+
+fn unpack_ort_lib(wheel: &Path, lib: &Path) -> Result<()> {
+    let mut zip = zip::ZipArchive::new(std::io::BufReader::new(std::fs::File::open(wheel)?))?;
+    let tmp = lib.with_extension("part");
+    let result = (|| {
+        let mut entry = zip.by_name(&format!("onnxruntime/capi/{ORT_LIB}"))?;
+        std::io::copy(&mut entry, &mut std::fs::File::create(&tmp)?)?;
+        let got = sha256_file(&tmp)?;
+        anyhow::ensure!(got == ORT_LIB_SHA, "sha256 mismatch: expected {ORT_LIB_SHA}, got {got}");
+        Ok(std::fs::rename(&tmp, lib)?)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 fn verify(path: &Path, sha256: &str) -> bool {
     if VERIFIED.lock().unwrap().contains(path) {
         return true;

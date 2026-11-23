@@ -1,6 +1,6 @@
 [package]
 name = "luma_rust"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2024"
 
 # Package keeps its name; the command users type is `luma`.
@@ -23,7 +23,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 regex = "1"
 evalexpr = "13"
 # CLIP-эмбеддинги (модели в ~/.config/luma/models/clip/): пример и модуль src/backend/files/clip.rs
-ort = "2.0.0-rc.14"
+# load-dynamic: libonnxruntime.so is downloaded at runtime (download.rs), not linked in,
+# so the binary only needs the glibc of the build machine. api-31 = ORT 1.31 (pinned there).
+ort = { version = "2.0.0-rc.14", default-features = false, features = ["std", "ndarray", "tracing", "load-dynamic", "api-31"] }
 ndarray = "0.17"
 image = "0.25"
 # буфер обмена: картинка для поиска похожих
