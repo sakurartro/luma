@@ -79,9 +79,8 @@ fn recognize_video(models: &mut SpeechModels, path: &str, max_sec: f64) -> Vec<(
 }
 
 /// Start the worker in the background; gated by `video` and `video_speech`
-/// (off = no model, no RAM, no CPU). The model is downloaded on first
-/// enable. No-op without ffmpeg.
-pub fn start_indexing(st: &Settings) {
+/// settings, ffmpeg availability and the result of startup asset preparation.
+pub fn start_indexing(st: &Settings, models_ready: bool) {
     if !st.video || !st.video_speech {
         return;
     }
@@ -91,7 +90,9 @@ pub fn start_indexing(st: &Settings) {
     }
     let _ = MAX_SEC.set(st.video_speech_max_min as f64 * 60.0);
     SPEECH_ON.store(true, Ordering::Relaxed);
-    std::thread::spawn(|| index_pass(false));
+    if models_ready {
+        std::thread::spawn(|| index_pass(false));
+    }
 }
 
 /// Whether the `video_speech` setting was on at startup: speech hits are searched.
@@ -146,7 +147,7 @@ fn index_pass(rerun: bool) {
     if total == 0 && rerun {
         return;
     }
-    if !ensure_model() {
+    if rerun && !ensure_model() {
         return;
     }
     let Some(mut models) = SpeechModels::load() else { return };

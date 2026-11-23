@@ -3,7 +3,7 @@
 
 use super::inference::{l2_normalize, models_dir, ClipModels, QueryModels};
 use crate::backend::apps::db_init::open_conn;
-use crate::backend::files::download::ensure_models;
+use crate::backend::files::download::{ModelFile, PendingModels};
 use super::video;
 use crate::backend::files::files_search::{FileEntry, image_where, SCAN_COMPLETE};
 use crate::backend::files::video::frames::ffmpeg_available;
@@ -17,10 +17,6 @@ use std::time::{Duration, Instant};
 // Progress, same polling style as INDEX_* in files_search; no UI hook yet.
 pub static EMB_TOTAL: AtomicUsize = AtomicUsize::new(0);
 pub static EMB_DONE: AtomicUsize = AtomicUsize::new(0);
-
-// Model download progress in bytes; DL_TOTAL 0 = no download in progress.
-pub static DL_TOTAL: AtomicUsize = AtomicUsize::new(0);
-pub static DL_DONE: AtomicUsize = AtomicUsize::new(0);
 
 // Query side of the models (text + vision), filled at the end of indexing and
 // kept for the rest of the run; None until then (or without models/clip/).
@@ -80,23 +76,30 @@ const KIND: &str = "clip";
 
 // HuggingFace export the app expects: quantized ViT-B/32 (~154 MB total).
 // Pinned to a repo commit + sha256: a changed upstream file must not load.
-const MODEL_FILES: [(&str, &str, &str); 3] = [
+const MODEL_FILES: [ModelFile<'static>; 3] = [
     (
         "tokenizer.json",
         "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/6b7c523703ae26e39be4b03774966f8571c7f523/tokenizer.json",
         "f7f3b7af117d467b58374797691a6438d3e6b9e9cef800dfd5dced7f697a90cd",
+        2_224_119,
     ),
     (
         "vision_model_quantized.onnx",
         "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/6b7c523703ae26e39be4b03774966f8571c7f523/onnx/vision_model_quantized.onnx",
         "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
+        89_117_001,
     ),
     (
         "text_model_quantized.onnx",
         "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/6b7c523703ae26e39be4b03774966f8571c7f523/onnx/text_model_quantized.onnx",
         "73baab855d406190da9faa498cfedf65f15cf309f4cc7385b7b032e6d08e5c3a",
+        64_504_507,
     ),
 ];
+
+pub(in crate::backend::files) fn pending_models() -> PendingModels<'static> {
+    PendingModels::new("clip", models_dir(), &MODEL_FILES)
+}
 
 // DB rows read per pass; a multiple of INFERENCE_BATCH.
 const DB_CHUNK: usize = 16;
@@ -340,10 +343,8 @@ impl Drop for SetDoneOnDrop {
 static VIDEO: OnceLock<(u32, u32)> = OnceLock::new();
 
 /// Start the indexing worker in the background; gated by the `semantic`
-/// setting (off = the feature costs nothing: no models, no RAM, no CPU).
-/// On first enable the models are downloaded from HuggingFace. Silently
-/// no-ops when the download fails or models/clip/ is broken.
-pub fn start_indexing(st: &Settings) {
+/// setting and the result of startup asset preparation.
+pub fn start_indexing(st: &Settings, models_ready: bool) {
     if !st.semantic {
         CLIP_DONE.store(true, Ordering::Release);
         return;
@@ -356,7 +357,11 @@ pub fn start_indexing(st: &Settings) {
         }
     }
     SEMANTIC_ON.store(true, Ordering::Relaxed);
-    std::thread::spawn(|| index_pass(false));
+    if models_ready {
+        std::thread::spawn(|| index_pass(false));
+    } else {
+        CLIP_DONE.store(true, Ordering::Release);
+    }
 }
 
 // Quiet time after the last new/changed photo before it gets embedded:
@@ -404,7 +409,7 @@ fn index_pass(rerun: bool) {
     let _done = SetDoneOnDrop;
     // A panicked pass must not block the other worker forever.
     let _onnx = ONNX_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !ensure_models("clip", &models_dir(), &MODEL_FILES, &DL_TOTAL, &DL_DONE) {
+    if rerun && !pending_models().install_as_batch() {
         return;
     }
     let Ok(mut conn) = open_conn() else { return };
