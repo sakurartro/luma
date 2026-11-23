@@ -10,8 +10,9 @@ mod video;
 pub(crate) use inference::open_image;
 
 pub use clipboard::read_image;
+pub(super) use index::pending_models;
 pub use index::{
-    clip_ready, clip_search, clip_similar, is_stale, next_query, NEVER_STALE, CLIP_DONE, DL_DONE, DL_TOTAL, EMB_DONE, EMB_TOTAL, MATCH_NAME,
+    clip_ready, clip_search, clip_similar, is_stale, next_query, NEVER_STALE, CLIP_DONE, EMB_DONE, EMB_TOTAL, MATCH_NAME,
     MATCH_SEMANTIC, ONNX_LOCK, schedule_reindex, start_indexing,
 };
 pub use video::{VID_DONE, VID_TOTAL};

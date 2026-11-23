@@ -6,7 +6,7 @@ use super::search;
 use super::video as ocr_video;
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::files::clip::{CLIP_DONE, ONNX_LOCK};
-use crate::backend::files::download::ensure_models;
+use crate::backend::files::download::{ModelFile, PendingModels};
 use crate::backend::files::files_search::{image_where, SCAN_COMPLETE};
 use crate::backend::files::video::{self, frames::ffmpeg_available};
 use crate::backend::settings::Settings;
@@ -31,31 +31,34 @@ impl Drop for SetPassDoneOnDrop {
     }
 }
 
-// Model download progress in bytes; OCR_DL_TOTAL 0 = no download in progress.
-pub static OCR_DL_TOTAL: AtomicUsize = AtomicUsize::new(0);
-pub static OCR_DL_DONE: AtomicUsize = AtomicUsize::new(0);
-
 // English PP-OCRv4 (~12 MB total): detector from the RapidOCR repo (it finds
 // text regardless of language, the recognizer + dict carry the language),
 // recognizer and its dict from other HF repos. Local names are fixed.
 // Pinned to a repo commit + sha256: a changed upstream file must not load.
-const MODEL_FILES: [(&str, &str, &str); 3] = [
+const MODEL_FILES: [ModelFile<'static>; 3] = [
     (
         "det.onnx",
         "https://huggingface.co/SWHL/RapidOCR/resolve/1cfba2e90fc938db55889873735088de210cc173/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
         "d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+        4_745_517,
     ),
     (
         "rec.onnx",
         "https://huggingface.co/breezedeus/cnocr-ppocr-en_PP-OCRv4/resolve/4af71ff013f195d04426f6dca62ec26656dfbbc4/en_PP-OCRv4_rec_infer.onnx",
         "5ca59a096cf493d5fd5044b9ccc1bdea9229fbcf656bd76040ff80a00201ee16",
+        7_656_802,
     ),
     (
         "dict.txt",
         "https://huggingface.co/deepghs/paddleocr/resolve/e7bd63d9c674c96bd4fdab435af0efb383919c18/rec/en_PP-OCRv4_rec/dict.txt",
         "5662df9d2d03f0e8ca0d3b0649d6acbab904b6a14b3d3521463c71c37c668ce3",
+        190,
     ),
 ];
+
+pub(in crate::backend::files) fn pending_models() -> PendingModels<'static> {
+    PendingModels::new("ocr", models_dir(), &MODEL_FILES)
+}
 
 // Images per pass: OCR is slow (hundreds of ms per image), so keep chunks
 // small — results reach the db often and an interrupted run loses little.
@@ -105,10 +108,8 @@ fn upsert_batch(conn: &mut Connection, rows: &[(String, i64, String)]) -> Result
 pub(super) static VIDEO: OnceLock<(u32, u32)> = OnceLock::new();
 
 /// Start the indexing worker in the background; gated by the `ocr` setting
-/// (off = the feature costs nothing: no models, no RAM, no CPU). On first
-/// enable the models are downloaded from HuggingFace. Silently no-ops when
-/// the download fails or models/ocr/ is broken.
-pub fn start_indexing(st: &Settings) {
+/// and the result of startup asset preparation.
+pub fn start_indexing(st: &Settings, models_ready: bool) {
     if !st.ocr {
         OCR_PASS_DONE.store(true, Ordering::Release);
         return;
@@ -121,7 +122,11 @@ pub fn start_indexing(st: &Settings) {
         }
     }
     OCR_ON.store(true, Ordering::Relaxed);
-    std::thread::spawn(|| index_pass(false));
+    if models_ready {
+        std::thread::spawn(|| index_pass(false));
+    } else {
+        OCR_PASS_DONE.store(true, Ordering::Release);
+    }
 }
 
 // Same debounce as clip::schedule_reindex: one pass per burst of new photos.
@@ -173,7 +178,7 @@ fn index_pass(rerun: bool) {
     // Taken after the wait: clip's startup pass holds it until CLIP_DONE.
     // Also serializes ocr passes, so a rerun can't overlap the startup one.
     let _onnx = ONNX_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !ensure_models("ocr", &models_dir(), &MODEL_FILES, &OCR_DL_TOTAL, &OCR_DL_DONE) {
+    if rerun && !pending_models().install_as_batch() {
         return;
     }
     let Ok(mut conn) = open_conn() else { return };
