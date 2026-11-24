@@ -46,3 +46,18 @@ export struct SettingField {
     // set on the first row of a menu section only
     heading: string,
 }
+
+export enum SettingsPage { overview, themes, custom }
+
+export struct ThemeOption {
+    id: string,
+    name: string,
+    bg: color,
+    surface: color,
+    hover: color,
+    selected: color,
+    border: color,
+    accent: color,
+    text: color,
+    text-dim: color,
+}
