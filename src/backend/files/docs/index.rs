@@ -72,13 +72,16 @@ fn upsert_batch(conn: &mut Connection, rows: &[(String, i64, String)]) -> Result
     let tx = conn.transaction()?;
     {
         let mut meta = tx.prepare(
-            "INSERT INTO doc_meta (file_path, mtime) VALUES (?1, ?2)
+            "INSERT INTO doc_meta (file_path, mtime)
+             SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM files WHERE path = ?1 AND mtime = ?2)
              ON CONFLICT (file_path) DO UPDATE SET mtime = excluded.mtime",
         )?;
         let mut del = tx.prepare("DELETE FROM doc_fts WHERE file_path = ?1")?;
         let mut fts = tx.prepare("INSERT INTO doc_fts (file_path, body) VALUES (?1, ?2)")?;
         for (path, mtime, text) in rows {
-            meta.execute(params![path, mtime])?;
+            if meta.execute(params![path, mtime])? == 0 {
+                continue;
+            }
             del.execute([path])?;
             if !text.trim().is_empty() {
                 fts.execute(params![path, text])?;
@@ -278,5 +281,26 @@ mod tests {
         assert!(body(&conn, &a).is_some());
         run_pass(&mut conn, &cfg(&d), true).unwrap();
         assert!(body(&conn, &a).is_none());
+    }
+
+    #[test]
+    fn stale_worker_result_does_not_restore_a_moved_document() {
+        let mut conn = conn();
+        let old_path = "/docs/source/a.txt";
+        let new_path = "/docs/destination/a.txt";
+        add(&conn, Path::new(new_path), 2);
+        upsert_batch(
+            &mut conn,
+            &[
+                (old_path.into(), 2, "old location".into()),
+                (new_path.into(), 2, "current content".into()),
+                (new_path.into(), 1, "old content".into()),
+            ],
+        ).unwrap();
+
+        assert!(body(&conn, Path::new(old_path)).is_none());
+        assert_eq!(body(&conn, Path::new(new_path)).as_deref(), Some("current content"));
+        let meta_count: i64 = conn.query_row("SELECT count(*) FROM doc_meta", [], |row| row.get(0)).unwrap();
+        assert_eq!(meta_count, 1);
     }
 }

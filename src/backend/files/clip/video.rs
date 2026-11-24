@@ -3,9 +3,10 @@
 
 use super::inference::{image_tensor, ClipModels, INFERENCE_BATCH};
 use super::index::vec_to_blob;
+use crate::backend::files::db_service::file_is_current;
 use crate::backend::files::video::{self, frames};
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, TransactionBehavior};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -19,7 +20,10 @@ const KIND: &str = "clip";
 // their ocr text; a row left with neither vec nor ocr (old timestamp after the
 // video changed) is dropped.
 fn save(conn: &mut Connection, path: &str, mtime: i64, vecs: &[(f64, Vec<f32>)]) -> Result<()> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if !file_is_current(&tx, path, mtime)? {
+        return Ok(());
+    }
     tx.execute("UPDATE video_frames SET vec = NULL WHERE file_path = ?1", [path])?;
     {
         let mut stmt = tx.prepare(

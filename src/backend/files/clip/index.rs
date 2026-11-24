@@ -311,7 +311,8 @@ fn upsert_batch(conn: &mut Connection, rows: &[((String, i64), Vec<f32>)]) -> Re
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO embeddings (file_path, kind, mtime, vec) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO embeddings (file_path, kind, mtime, vec)
+             SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM files WHERE path = ?1 AND mtime = ?3)
              ON CONFLICT (file_path, kind) DO UPDATE SET mtime = excluded.mtime, vec = excluded.vec",
         )?;
         for ((path, mtime), vec) in rows {

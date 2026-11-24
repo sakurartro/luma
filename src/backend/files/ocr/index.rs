@@ -92,7 +92,8 @@ fn upsert_batch(conn: &mut Connection, rows: &[(String, i64, String)]) -> Result
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO ocr_text (file_path, mtime, text) VALUES (?1, ?2, ?3)
+            "INSERT INTO ocr_text (file_path, mtime, text)
+             SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM files WHERE path = ?1 AND mtime = ?2)
              ON CONFLICT (file_path) DO UPDATE SET mtime = excluded.mtime, text = excluded.text",
         )?;
         for (path, mtime, text) in rows {
@@ -308,7 +309,9 @@ mod tests {
     #[test]
     fn upsert_replaces_and_lowercases() {
         let mut conn = conn();
+        conn.execute("INSERT INTO files (name, path, mtime) VALUES ('a.png', '/d/a.png', 1)", []).unwrap();
         upsert_batch(&mut conn, &[("/d/a.png".into(), 1, "Hello МИР".into())]).unwrap();
+        conn.execute("UPDATE files SET mtime = 2 WHERE path = '/d/a.png'", []).unwrap();
         upsert_batch(&mut conn, &[("/d/a.png".into(), 2, "Второй".into())]).unwrap();
 
         let (mtime, text): (i64, String) = conn

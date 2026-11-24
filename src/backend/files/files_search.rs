@@ -91,6 +91,29 @@ pub struct FileEntry {
     pub mtime: i64,
 }
 
+impl FileEntry {
+    pub(super) fn from_path(path: &Path) -> Self {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        Self {
+            name_lower: name.to_lowercase().chars().collect(),
+            name: name.into_owned(),
+            path: path.to_string_lossy().into_owned(),
+            is_dir: path.is_dir(),
+            mtime: mtime_of(path),
+        }
+    }
+}
+
+pub(super) fn walk_entries<'a>(
+    root: &Path,
+    excluded: &'a [PathBuf],
+) -> impl Iterator<Item = walkdir::DirEntry> + 'a {
+    WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| !is_excluded(entry.path(), excluded))
+        .filter_map(Result::ok)
+}
+
 /// "~/" at the start (or bare "~") expands to $HOME; anything else stays as-is.
 pub fn expand_home(dir: &str) -> PathBuf {
     let home = match std::env::var_os("HOME") {
@@ -126,12 +149,7 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String], exclude: &[String]) -> 
     for dir in dirs {
         let root = expand_home(dir);
         if root.is_dir() {
-            total += WalkDir::new(&root)
-                .into_iter()
-                .filter_entry(|entry| !is_excluded(entry.path(), &excluded))
-                .filter_map(Result::ok)
-                .filter(|entry| entry.depth() > 0)
-                .count();
+            total += walk_entries(&root, &excluded).filter(|entry| entry.depth() > 0).count();
         }
     }
     INDEX_TOTAL.store(total, Ordering::Relaxed);
@@ -151,27 +169,11 @@ pub fn scan_dirs(conn: &mut Connection, dirs: &[String], exclude: &[String]) -> 
             all_dirs_present = false;
             continue;
         }
-        // filter_entry prunes: an excluded dir's subtree is never read.
-        for entry_result in WalkDir::new(&root).into_iter().filter_entry(|entry| !is_excluded(entry.path(), &excluded)) {
-            // skip unreadable/vanished paths instead of aborting the whole scan
-            let Some(entry) = entry_result.ok() else { continue };
+        for entry in walk_entries(&root, &excluded) {
             if entry.depth() == 0 {
                 continue;
             }
-            let path = entry.path();
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            let name_lower = name.to_lowercase().chars().collect();
-            batch.push(FileEntry {
-                name,
-                name_lower,
-                path: path.to_string_lossy().into_owned(),
-                is_dir: path.is_dir(),
-                mtime: mtime_of(path),
-            });
+            batch.push(FileEntry::from_path(entry.path()));
             if batch.len() == 5000 {
                 insert_batch(&batch, conn)?;
                 INDEXED.fetch_add(batch.len(), Ordering::Relaxed);

@@ -1,14 +1,19 @@
-use crate::backend::apps::db_init::open_conn;
-use super::db_service::{del_entry, insert_batch};
-use super::files_search::{expand_home, is_excluded, mtime_of, DB_VERSION, FileEntry};
-use notify::{EventKind, RecursiveMode, Watcher};
-use std::path::PathBuf;
+use super::db_service::{del_path, insert_entries};
+use super::files_search::{DB_VERSION, FileEntry, expand_home, is_excluded, walk_entries};
+use crate::backend::apps::db_init::{config_dir, open_conn};
+use notify::event::{ModifyKind, RenameMode};
+use notify::{Event, EventKind, RecursiveMode, Watcher};
+use rusqlite::Connection;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread;
 
 pub fn start_files_watcher(dirs: &[String], exclude: &[String]) {
     let dirs = dirs.to_vec();
-    let excluded: Vec<PathBuf> = exclude.iter().map(|dir| expand_home(dir)).collect();
+    let mut excluded: Vec<PathBuf> = exclude.iter().map(|dir| expand_home(dir)).collect();
+    // Indexing the database's own writes would feed the watcher indefinitely.
+    excluded.push(config_dir());
     thread::spawn(move || {
         let mut conn = open_conn().expect("Failed to init db conn by files watcher");
         let (tx, rx) = mpsc::channel();
@@ -21,82 +26,78 @@ pub fn start_files_watcher(dirs: &[String], exclude: &[String]) {
             }
         }
 
-        fn upsert(path: &std::path::Path, conn: &mut rusqlite::Connection, excluded: &[PathBuf]) {
-            // The db lives under the watched tree; writing it would trigger
-            // inotify again and feed the watcher with its own writes forever.
-            if path.starts_with(crate::backend::apps::db_init::config_dir()) {
-                return;
-            }
-            // shortcut: notify still watches excluded subtrees, their events
-            // are only dropped here; prune the watch itself if inotify limits bite.
-            if is_excluded(path, excluded) {
-                return;
-            }
-            if !(path.is_dir() || path.is_file()) {
-                return;
-            }
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            let entry = FileEntry {
-                name_lower: name.to_lowercase().chars().collect(),
-                name: name.into_owned(),
-                path: path.to_string_lossy().into_owned(),
-                is_dir: path.is_dir(),
-                mtime: mtime_of(path),
-            };
-            let is_photo = super::files_search::is_image(&entry.path);
-            let is_video = super::files_search::is_video(&entry.path);
-            let is_doc = super::docs::is_doc(std::path::Path::new(&entry.path));
-            let _ = insert_batch(&[entry], conn);
-            if is_photo {
-                super::clip::schedule_reindex();
-                super::ocr::schedule_reindex();
-            }
-            if is_video {
-                super::clip::schedule_reindex();
-                super::ocr::schedule_reindex();
-                super::video::speech_index::schedule_reindex();
-            }
-            if is_doc {
-                super::docs::schedule_reindex();
-            }
-        }
-
         for event in rx {
             let Ok(event) = event else {
                 continue;
             };
-
-            match event.kind {
-                EventKind::Create(_) => {
-                    for path in event.paths {
-                        // shortcut: contents of a moved-in tree stay unindexed
-                        // until the next startup rescan; inotify only sees
-                        // the moved dir itself
-                        upsert(&path, &mut conn, &excluded);
-                    }
-                    DB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-
-                // Rename/content change: drop the old rows, re-index what still
-                // exists with a fresh mtime. Rename events carry both paths.
-                EventKind::Modify(_) => {
-                    for path in &event.paths {
-                        let _ = del_entry(&mut conn, path.to_string_lossy().to_string());
-                    }
-                    for path in &event.paths {
-                        upsert(path, &mut conn, &excluded);
-                    }
-                    DB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-
-                EventKind::Remove(_) => {
-                    for path in event.paths {
-                        let _ = del_entry(&mut conn, path.to_string_lossy().to_string());
-                    }
-                    DB_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                _ => {}
+            if let Err(err) = apply_event(&mut conn, &event, &excluded) {
+                eprintln!("file watcher update error: {err}");
             }
         }
     });
+}
+
+fn apply_event(conn: &mut Connection, event: &Event, excluded: &[PathBuf]) -> anyhow::Result<()> {
+    let (walk_subtree, invalidate, check_old_subtree) = match event.kind {
+        // notify's inotify backend emits From and To before their combined event.
+        #[cfg(target_os = "linux")]
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => return Ok(()),
+        EventKind::Create(_) => (true, false, false),
+        EventKind::Modify(ModifyKind::Name(RenameMode::To)) => (true, true, false),
+        EventKind::Modify(ModifyKind::Name(_)) | EventKind::Remove(_) => (true, true, true),
+        EventKind::Modify(_) => (false, true, false),
+        _ => return Ok(()),
+    };
+
+    let paths: Vec<_> = event.paths.iter().filter(|path| !is_excluded(path, excluded)).collect();
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let mut entries = Vec::new();
+    for path in &paths {
+        // Do not walk symlink targets. A symlink itself can still be indexed,
+        // just as it is during the startup scan.
+        if walk_subtree && path.symlink_metadata().is_ok_and(|meta| meta.is_dir()) {
+            entries.extend(walk_entries(path, excluded).map(|entry| FileEntry::from_path(entry.path())));
+        } else if path.is_dir() || path.is_file() {
+            entries.push(FileEntry::from_path(path));
+        }
+    }
+
+    let tx = conn.transaction()?;
+    if invalidate {
+        for path in paths {
+            del_path(&tx, &path.to_string_lossy(), check_old_subtree)?;
+        }
+    }
+    if !entries.is_empty() {
+        insert_entries(&entries, &tx)?;
+    }
+    tx.commit()?;
+
+    DB_VERSION.fetch_add(1, Ordering::Relaxed);
+    schedule_content_indexing(&entries);
+    Ok(())
+}
+
+fn schedule_content_indexing(entries: &[FileEntry]) {
+    let mut photo = false;
+    let mut video = false;
+    let mut doc = false;
+    for entry in entries.iter().filter(|entry| !entry.is_dir) {
+        photo |= super::files_search::is_image(&entry.path);
+        video |= super::files_search::is_video(&entry.path);
+        doc |= super::docs::is_doc(Path::new(&entry.path));
+    }
+    if photo || video {
+        super::clip::schedule_reindex();
+        super::ocr::schedule_reindex();
+    }
+    if video {
+        super::video::speech_index::schedule_reindex();
+    }
+    if doc {
+        super::docs::schedule_reindex();
+    }
 }

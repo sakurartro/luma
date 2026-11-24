@@ -3,9 +3,10 @@
 // video_frames.ocr.
 
 use super::inference::OcrModels;
+use crate::backend::files::db_service::file_is_current;
 use crate::backend::files::video::{self, frames};
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, TransactionBehavior};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -15,7 +16,10 @@ const KIND: &str = "ocr";
 // their vector; a row left with neither vec nor ocr is dropped. Text is
 // lowercased like ocr_text (SQLite LIKE folds only ASCII).
 fn save(conn: &mut Connection, path: &str, mtime: i64, texts: &[(f64, String)]) -> Result<()> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if !file_is_current(&tx, path, mtime)? {
+        return Ok(());
+    }
     tx.execute("UPDATE video_frames SET ocr = NULL WHERE file_path = ?1", [path])?;
     {
         let mut stmt = tx.prepare(

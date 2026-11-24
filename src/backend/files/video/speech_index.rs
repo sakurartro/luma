@@ -5,12 +5,13 @@ use super::frames::{self, ffmpeg_available};
 use super::speech::{ensure_model, SpeechModels};
 use crate::backend::apps::db_init::open_conn;
 use crate::backend::files::clip::{CLIP_DONE, ONNX_LOCK};
+use crate::backend::files::db_service::file_is_current;
 use crate::backend::files::files_search::SCAN_COMPLETE;
 use crate::backend::files::ocr::OCR_PASS_DONE;
 use crate::backend::files::video;
 use crate::backend::settings::Settings;
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, TransactionBehavior};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -30,7 +31,10 @@ static MAX_SEC: OnceLock<f64> = OnceLock::new();
 
 // Replaces the file's segments and marks it done at `mtime`.
 fn save(conn: &mut Connection, path: &str, mtime: i64, segments: &[(f64, String)]) -> Result<()> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if !file_is_current(&tx, path, mtime)? {
+        return Ok(());
+    }
     tx.execute("DELETE FROM speech_fts WHERE file_path = ?1", [path])?;
     {
         let mut stmt = tx.prepare("INSERT INTO speech_fts (file_path, t_sec, body) VALUES (?1, ?2, ?3)")?;
