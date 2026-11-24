@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 use crate::backend::apps::db_init::config_dir;
 
+pub const COLOR_KEYS: [&str; 8] = ["bg", "surface", "hover", "selected", "border", "accent", "text", "text_dim"];
+pub const CUSTOM_THEME: &str = "custom";
+
 #[derive(serde::Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -15,6 +18,9 @@ pub struct Settings {
     pub accent: String,
     pub text: String,
     pub text_dim: String,
+    // The eight colors above are the saved Custom palette.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme_preset: Option<String>,
     #[serde(default = "default_search_dirs")]
     pub search_dirs: Vec<String>,
     // Prefix match on file/folder name; "." hides all dotfiles. Display only:
@@ -123,6 +129,7 @@ impl Default for Settings {
             accent: "#A9B665".into(),
             text: "#E4E7D0".into(),
             text_dim: "#7E8A6C".into(),
+            theme_preset: None,
             search_dirs: default_search_dirs(),
             hide_patterns: default_hide_patterns(),
             exclude_dirs: Vec::new(),
@@ -218,9 +225,25 @@ pub fn update(key: &str, change: Change) -> anyhow::Result<Settings> {
 fn with_change(text: &str, key: &str, change: Change) -> anyhow::Result<(String, Settings)> {
     use serde_json::Value;
     let mut obj: serde_json::Map<String, Value> = serde_json::from_str(text)?;
-    let value = obj.get_mut(key).ok_or_else(|| anyhow::anyhow!("{key}: no such setting"))?;
+    let value = if key == "theme_preset" || COLOR_KEYS.contains(&key) {
+        obj.entry(key).or_insert(Value::Null)
+    } else {
+        obj.get_mut(key).ok_or_else(|| anyhow::anyhow!("{key}: no such setting"))?
+    };
     // "" never enters a list: a "" hide pattern would hide every file (starts_with)
     match (value, change) {
+        (value, Change::Text(id)) if key == "theme_preset" => {
+            if id != CUSTOM_THEME && !super::theme_presets::THEME_PRESETS.iter().any(|preset| preset.id == id) {
+                anyhow::bail!("unknown theme: {id}");
+            }
+            *value = Value::String(id);
+        }
+        (value, Change::Text(new)) if COLOR_KEYS.contains(&key) => {
+            if !is_color(&new) {
+                anyhow::bail!("{key}: expected #RRGGBB, got {new:?}");
+            }
+            *value = Value::String(new);
+        }
         (Value::Bool(b), Change::Toggle) => *b = !*b,
         (Value::Bool(b), Change::Set(on)) => *b = on,
         (Value::String(s), Change::Text(new)) => {
@@ -378,6 +401,20 @@ mod tests {
             assert!(with_change(&t, "accent", Change::Text(bad.into())).is_err(), "{bad}");
         }
         assert_eq!(change(&t, "accent", Change::Text("#a1B2c3".into()))["accent"], "#a1B2c3");
+    }
+
+    #[test]
+    fn switching_themes_keeps_saved_custom_colors() {
+        let original = r##"{"accent":"#123456","unknown":42}"##;
+        let (preset_json, preset) = with_change(original, "theme_preset", Change::Text("luma".into())).unwrap();
+        assert_eq!(preset.theme_preset.as_deref(), Some("luma"));
+        assert_eq!(preset.accent, "#123456");
+        let (custom_json, custom) = with_change(&preset_json, "theme_preset", Change::Text(CUSTOM_THEME.into())).unwrap();
+        assert_eq!(custom.accent, "#123456");
+        assert_eq!(custom.theme_preset.as_deref(), Some(CUSTOM_THEME));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&custom_json).unwrap()["unknown"], 42);
+        assert!(with_change(original, "theme_preset", Change::Text("missing".into())).is_err());
+        assert_eq!(change(&custom_json, "bg", Change::Text("#654321".into()))["bg"], "#654321");
     }
 
     #[test]

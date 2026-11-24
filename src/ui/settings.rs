@@ -1,5 +1,6 @@
-use crate::backend::settings::{self, Change, Settings};
-use crate::{AgentRow, MainWindow, SettingField, Theme};
+use crate::backend::settings::{self, Change, Settings, COLOR_KEYS, CUSTOM_THEME};
+use crate::backend::theme_presets::{ThemePreset, THEME_PRESETS};
+use crate::{AgentRow, MainWindow, SettingField, Theme, ThemeOption};
 use serde_json::Value;
 use slint::{ComponentHandle, Model, SharedString, VecModel};
 use std::io::Write;
@@ -26,17 +27,43 @@ pub fn remember_startup(st: &Settings) {
     let _ = STARTED_WITH.set(restart_values(st));
 }
 
+fn custom_colors(st: &Settings) -> [&str; 8] {
+    [&st.bg, &st.surface, &st.hover, &st.selected, &st.border, &st.accent, &st.text, &st.text_dim]
+}
+
+fn preset_colors(preset: &ThemePreset) -> [&str; 8] {
+    [preset.bg, preset.surface, preset.hover, preset.selected, preset.border, preset.accent, preset.text, preset.text_dim]
+}
+
+fn active_theme(st: &Settings) -> usize {
+    THEME_PRESETS.iter().position(|preset| match st.theme_preset.as_deref() {
+        Some(id) => id == preset.id,
+        // An older settings file has a named theme only if its colors are the original defaults.
+        None => preset.id == "luma" && preset_colors(preset).map(settings::parse_color) == custom_colors(st).map(settings::parse_color),
+    }).unwrap_or(THEME_PRESETS.len())
+}
+
+fn theme_option(id: &str, name: &str, colors: [&str; 8]) -> ThemeOption {
+    let [bg, surface, hover, selected, border, accent, text, text_dim] = colors.map(settings::parse_color);
+    ThemeOption { id: id.into(), name: name.into(), bg, surface, hover, selected, border, accent, text, text_dim }
+}
+
+fn apply_colors(window: &MainWindow, colors: [&str; 8]) {
+    let [bg, surface, hover, selected, border, accent, text, text_dim] = colors.map(settings::parse_color);
+    let theme = window.global::<Theme>();
+    theme.set_bg(bg);
+    theme.set_surface(surface);
+    theme.set_hover(hover);
+    theme.set_selected(selected);
+    theme.set_border(border);
+    theme.set_accent(accent);
+    theme.set_text(text);
+    theme.set_text_dim(text_dim);
+}
+
 /// Everything that can change without a restart.
 pub(super) fn apply_settings(window: &MainWindow, st: &Settings, ctx: &Ctx) {
-    let theme = window.global::<Theme>();
-    theme.set_bg(settings::parse_color(&st.bg));
-    theme.set_surface(settings::parse_color(&st.surface));
-    theme.set_hover(settings::parse_color(&st.hover));
-    theme.set_selected(settings::parse_color(&st.selected));
-    theme.set_border(settings::parse_color(&st.border));
-    theme.set_accent(settings::parse_color(&st.accent));
-    theme.set_text(settings::parse_color(&st.text));
-    theme.set_text_dim(settings::parse_color(&st.text_dim));
+    apply_colors(window, THEME_PRESETS.get(active_theme(st)).map(preset_colors).unwrap_or_else(|| custom_colors(st)));
     ctx.currency.set(st.currency);
     *ctx.hide_patterns.borrow_mut() = st.hide_patterns.clone();
 }
@@ -44,7 +71,6 @@ pub(super) fn apply_settings(window: &MainWindow, st: &Settings, ctx: &Ctx) {
 // Menu sections in display order; keys not listed here (new Settings fields,
 // keys added by hand) land in "Other" in file order.
 const CATEGORIES: &[(&str, &[&str])] = &[
-    ("Appearance", &["bg", "surface", "hover", "selected", "border", "accent", "text", "text_dim"]),
     ("Files", &["search_dirs", "hide_patterns", "exclude_dirs"]),
     ("Photos", &["semantic", "ocr"]),
     ("Documents", &["docs", "docs_max_file_mb", "docs_max_text_kb", "docs_max_pdf_pages"]),
@@ -89,8 +115,9 @@ fn field(key: &str, value: &Value) -> Option<SettingField> {
 // section carries its heading.
 fn fields(obj: &serde_json::Map<String, Value>) -> Vec<SettingField> {
     let listed: Vec<&str> = CATEGORIES.iter().flat_map(|(_, keys)| keys.iter().copied()).collect();
-    let other: Vec<&str> =
-        obj.keys().map(String::as_str).filter(|k| !listed.contains(k) && *k != HIDDEN).collect();
+    let other: Vec<&str> = obj.keys().map(String::as_str).filter(|k|
+        !listed.contains(k) && !COLOR_KEYS.contains(k) && ![HIDDEN, "theme_preset"].contains(k)
+    ).collect();
     let mut sections: Vec<(&str, &[&str])> = CATEGORIES.to_vec();
     sections.push(("Other", &other));
 
@@ -112,14 +139,50 @@ fn show(window: &MainWindow) {
         Ok(obj) => {
             let st = serde_json::from_value::<Settings>(Value::Object(obj.clone())).ok();
             let started = STARTED_WITH.get();
-            window.set_needs_restart(matches!((st, started), (Some(st), Some(s)) if restart_values(&st) != *s));
+            window.set_needs_restart(matches!((&st, started), (Some(st), Some(s)) if restart_values(st) != *s));
             window.set_settings(Rc::new(VecModel::from(fields(&obj))).into());
             window.set_settings_error("".into());
+            if let Some(st) = st {
+                show_themes(window, &st);
+            } else {
+                window.set_themes(Default::default());
+            }
         }
         Err(err) => {
             window.set_settings(Rc::new(VecModel::<SettingField>::default()).into());
+            window.set_themes(Default::default());
             window.set_settings_error(format!("settings.json: {err}").into());
         }
+    }
+}
+
+fn show_themes(window: &MainWindow, st: &Settings) {
+    let colors = custom_colors(st);
+    let mut options: Vec<_> = THEME_PRESETS.iter()
+        .map(|preset| theme_option(preset.id, preset.name, preset_colors(preset)))
+        .collect();
+    options.push(theme_option(CUSTOM_THEME, "Custom", colors));
+    window.set_themes(Rc::new(VecModel::from(options)).into());
+    window.set_active_theme(active_theme(st) as i32);
+
+    let model = window.get_custom_colors();
+    let rows = COLOR_KEYS.into_iter().zip(colors).map(|(key, value)| SettingField {
+        key: key.into(),
+        label: key.into(),
+        kind: 1,
+        text: value.into(),
+        color: settings::parse_color(value),
+        ..Default::default()
+    });
+    // Keep the editor inputs alive when a color commits on focus loss.
+    if model.row_count() == COLOR_KEYS.len() {
+        for (index, row) in rows.enumerate() {
+            if model.row_data(index).is_some_and(|old| old.text != row.text) {
+                model.set_row_data(index, row);
+            }
+        }
+    } else {
+        window.set_custom_colors(Rc::new(VecModel::from(rows.collect::<Vec<_>>())).into());
     }
 }
 
@@ -341,7 +404,7 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
         let weak = main_window.as_weak();
         let ctx = ctx.clone();
         move |key: SharedString, change: Change| {
-            let Some(window) = weak.upgrade() else { return };
+            let Some(window) = weak.upgrade() else { return false };
             let result = settings::update(&key, change);
             // on -> off: the contents of the user's files must not stay in the db
             if key == "docs" && matches!(&result, Ok(st) if !st.docs) {
@@ -368,7 +431,9 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
             if let Err(err) = result {
                 eprintln!("settings change rejected: {err}");
                 window.set_settings_error(err.to_string().into());
+                return false;
             }
+            true
         }
     };
     let edit = Rc::new(edit);
@@ -404,21 +469,25 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
     });
     main_window.on_setting_toggle({
         let edit = edit.clone();
-        move |key| edit(key, Change::Toggle)
+        move |key| { edit(key, Change::Toggle); }
     });
     main_window.on_setting_text({
         let edit = edit.clone();
-        move |key, text| edit(key, Change::Text(text.into()))
+        move |key, text| { edit(key, Change::Text(text.into())); }
     });
     main_window.on_setting_list_set({
         let edit = edit.clone();
-        move |key, i, text| edit(key, Change::ListSet(i as usize, text.into()))
+        move |key, i, text| { edit(key, Change::ListSet(i as usize, text.into())); }
     });
     main_window.on_setting_list_add({
         let edit = edit.clone();
-        move |key, text| edit(key, Change::ListAdd(text.into()))
+        move |key, text| { edit(key, Change::ListAdd(text.into())); }
     });
-    main_window.on_setting_list_remove(move |key, i| edit(key, Change::ListRemove(i as usize)));
+    main_window.on_setting_list_remove({
+        let edit = edit.clone();
+        move |key, i| { edit(key, Change::ListRemove(i as usize)); }
+    });
+    main_window.on_select_theme(move |id| edit("theme_preset".into(), Change::Text(id.into())));
 
     main_window.on_restart(|| {
         // Without --toggle the new process opens its window right away; the
@@ -453,15 +522,24 @@ mod tests {
 
     #[test]
     fn fields_grouped_by_category_with_unknown_keys_last() {
-        let obj = serde_json::json!({"custom": "x", "currency": true, "accent": "#A9B665", "bg": "#000000"});
+        let obj = serde_json::json!({"custom": "x", "currency": true, "accent": "#A9B665", "bg": "#000000", "theme_preset": "luma"});
         let rows = fields(obj.as_object().unwrap());
         let keys: Vec<_> = rows.iter().map(|r| (r.key.to_string(), r.heading.to_string())).collect();
         assert_eq!(keys, [
-            ("bg".into(), "Appearance".into()),
-            ("accent".into(), String::new()),
             ("currency".into(), "Calculator".into()),
             ("custom".into(), "Other".into()),
         ]);
+    }
+
+    #[test]
+    fn older_custom_colors_stay_custom() {
+        let default = Settings::default();
+        assert_eq!(THEME_PRESETS[active_theme(&default)].id, "luma");
+        let mut changed = Settings { accent: "#345678".into(), ..default };
+        assert_eq!(active_theme(&changed), THEME_PRESETS.len());
+        changed.theme_preset = Some("luma".into());
+        assert_eq!(THEME_PRESETS[active_theme(&changed)].id, "luma");
+        assert_eq!(changed.accent, "#345678");
     }
 
     #[test]
