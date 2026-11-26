@@ -319,7 +319,7 @@ export component SettingsView {
 
             Text {
                 horizontal-stretch: 1;
-                text: "search_dirs / semantic / ocr / docs apply after a restart";
+                text: "Restart to apply search settings";
                 color: Theme.text-dim;
                 font-size: 12px;
                 vertical-alignment: center;
@@ -382,7 +382,7 @@ export component SettingsView {
                         }
                         if root.agents-idle: Text {
                             horizontal-stretch: 1;
-                            text: "won't work while semantic and ocr are off";
+                            text: "Enable photo search to use agents";
                             color: Theme.text-dim;
                             font-size: 12px;
                             overflow: elide;
@@ -428,7 +428,7 @@ export component SettingsView {
                         spacing: 10px;
 
                         Text {
-                            width: 130px;
+                            width: 208px;
                             height: 28px;
                             text: field.label;
                             color: Theme.text;

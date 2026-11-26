@@ -82,9 +82,14 @@ const CATEGORIES: &[(&str, &[&str])] = &[
 const HIDDEN: &str = "agent_api";
 
 fn field(key: &str, value: &Value) -> Option<SettingField> {
+    let label = match key {
+        "semantic" => "Search by description",
+        "ocr" => "Search for text in images",
+        _ => key.strip_prefix("docs_").or_else(|| key.strip_prefix("video_")).unwrap_or(key),
+    };
     let mut field = SettingField {
         key: key.into(),
-        label: key.strip_prefix("docs_").or_else(|| key.strip_prefix("video_")).unwrap_or(key).into(),
+        label: label.into(),
         ..Default::default()
     };
     match value {
@@ -316,7 +321,7 @@ fn agent_state(agent: &Agent, search_on: bool) -> (&'static str, &'static str) {
     match (registered, search_on) {
         (true, _) => ("connected", "Disconnect"),
         // the agent could connect, but every search would answer "not available"
-        (false, false) => ("enable semantic or ocr and restart first", ""),
+        (false, false) => ("Enable a photo search option and restart", ""),
         (false, true) => ("not connected", "Connect"),
     }
 }
