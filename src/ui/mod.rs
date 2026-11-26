@@ -3,6 +3,7 @@ mod files;
 mod power;
 mod search;
 mod settings;
+mod web_search;
 
 use crate::backend::apps::apps_search::App;
 use crate::backend::apps::db_init::DbState;
@@ -92,6 +93,7 @@ pub fn create_ui(db_state: DbState, visible: Rc<Cell<bool>>) -> Result<MainWindo
     files::wire(&main_window, &ctx);
     search::wire(&main_window, &ctx);
     settings::wire(&main_window, &ctx);
+    web_search::wire(&main_window);
 
     let weak_hide = main_window.as_weak();
     let visible_hide = visible.clone();

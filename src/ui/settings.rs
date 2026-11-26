@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 use std::thread;
 
-use super::Ctx;
+use super::{Ctx, web_search};
 
 // search_dirs / semantic / ocr / docs (and its limits) / exclude_dirs / video (and its limits) as the watcher and indexers got
 // them at startup; they can't be reconfigured live, so a difference asks for a restart.
@@ -66,6 +66,7 @@ pub(super) fn apply_settings(window: &MainWindow, st: &Settings, ctx: &Ctx) {
     apply_colors(window, THEME_PRESETS.get(active_theme(st)).map(preset_colors).unwrap_or_else(|| custom_colors(st)));
     ctx.currency.set(st.currency);
     *ctx.hide_patterns.borrow_mut() = st.hide_patterns.clone();
+    web_search::apply(window, &st.web_search_sites);
 }
 
 // Menu sections in display order; keys not listed here (new Settings fields,
@@ -121,7 +122,7 @@ fn field(key: &str, value: &Value) -> Option<SettingField> {
 fn fields(obj: &serde_json::Map<String, Value>) -> Vec<SettingField> {
     let listed: Vec<&str> = CATEGORIES.iter().flat_map(|(_, keys)| keys.iter().copied()).collect();
     let other: Vec<&str> = obj.keys().map(String::as_str).filter(|k|
-        !listed.contains(k) && !COLOR_KEYS.contains(k) && ![HIDDEN, "theme_preset"].contains(k)
+        !listed.contains(k) && !COLOR_KEYS.contains(k) && ![HIDDEN, "theme_preset", "web_search_sites"].contains(k)
     ).collect();
     let mut sections: Vec<(&str, &[&str])> = CATEGORIES.to_vec();
     sections.push(("Other", &other));
@@ -475,6 +476,15 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
     main_window.on_setting_toggle({
         let edit = edit.clone();
         move |key| { edit(key, Change::Toggle); }
+    });
+    main_window.on_toggle_web_site({
+        let edit = edit.clone();
+        let weak = main_window.as_weak();
+        move |id| {
+            if weak.upgrade().is_some_and(|window| window.get_web_sites().iter().any(|site| site.key == id)) {
+                edit("web_search_sites".into(), Change::ToggleWebSite(id.to_string()));
+            }
+        }
     });
     main_window.on_setting_text({
         let edit = edit.clone();

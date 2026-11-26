@@ -65,17 +65,29 @@ pub(super) fn load_files_if_stale(
         return;
     }
     last_load.set(Some(std::time::Instant::now()));
+    if let Some(window) = weak.upgrade() {
+        window.set_file_list_loading(true);
+    }
     // Own connection (same pattern as on_launch_app); reloads are rare.
     std::thread::spawn(move || {
-        match open_conn().and_then(|conn| files_db::get_files(&conn).map_err(anyhow::Error::from)) {
+        let reloaded = match open_conn().and_then(|conn| files_db::get_files(&conn).map_err(anyhow::Error::from)) {
             Ok(entries) => {
                 *FILES_RELOAD.lock().unwrap() = Some((version, entries));
-                // Re-run the current view: it picks the result up and redraws.
-                let _ = weak.upgrade_in_event_loop(|window| window.invoke_refresh_view());
+                true
             }
-            Err(err) => eprintln!("files refresh error, {err}"),
-        }
+            Err(err) => {
+                eprintln!("files refresh error, {err}");
+                false
+            }
+        };
         FILES_RELOAD_RUNNING.store(false, Ordering::Relaxed);
+        let _ = weak.upgrade_in_event_loop(move |window| {
+            if reloaded {
+                // Re-run the current view: it picks the result up and redraws.
+                window.invoke_refresh_view();
+            }
+            window.set_file_list_loading(FILES_RELOAD_RUNNING.load(Ordering::Relaxed));
+        });
     });
 }
 

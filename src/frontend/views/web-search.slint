@@ -1,0 +1,61 @@
+import { Theme } from "../theme.slint";
+import { SettingField } from "../types.slint";
+import { SelScrollView } from "../widgets.slint";
+
+export component WebSearchRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 30px;
+    border-radius: 6px;
+    background: root.selected ? Theme.selected : touch.has-hover ? Theme.hover : Theme.surface;
+    border-width: 1px;
+    border-color: root.selected ? Theme.accent : Theme.border;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+
+    Text {
+        x: 10px;
+        width: parent.width - 20px;
+        height: parent.height;
+        text: root.label;
+        color: Theme.text;
+        font-size: 13px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    touch := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component WebSearchMenu {
+    in property <[SettingField]> sites;
+    in property <int> selected;
+    callback open-site(string);
+
+    VerticalLayout {
+        spacing: 8px;
+        Text {
+            text: "Search the web";
+            color: Theme.text-dim;
+            font-size: 13px;
+        }
+        SelScrollView {
+            item-y: root.selected * 32px;
+            item-height: 30px;
+            VerticalLayout {
+                spacing: 2px;
+                for site[i] in root.sites: WebSearchRow {
+                    label: site.label;
+                    selected: root.selected == i;
+                    clicked => { root.open-site(site.key); }
+                }
+            }
+        }
+    }
+}

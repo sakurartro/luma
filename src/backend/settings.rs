@@ -76,6 +76,7 @@ pub struct Settings {
     // no network request is made, the calculator keeps working.
     #[serde(default = "default_currency")]
     pub currency: bool,
+    pub web_search_sites: Vec<String>,
 }
 
 fn default_max_file_mb() -> u64 {
@@ -146,6 +147,7 @@ impl Default for Settings {
             video_speech_max_min: default_video_speech_max_min(),
             agent_api: false,
             currency: default_currency(),
+            web_search_sites: Vec::new(),
         }
     }
 }
@@ -206,6 +208,7 @@ pub enum Change {
     ListSet(usize, String),
     ListAdd(String),
     ListRemove(usize),
+    ToggleWebSite(String),
 }
 
 /// Applies the edit to the file and returns the new settings; the file is
@@ -227,6 +230,8 @@ fn with_change(text: &str, key: &str, change: Change) -> anyhow::Result<(String,
     let mut obj: serde_json::Map<String, Value> = serde_json::from_str(text)?;
     let value = if key == "theme_preset" || COLOR_KEYS.contains(&key) {
         obj.entry(key).or_insert(Value::Null)
+    } else if key == "web_search_sites" && matches!(&change, Change::ToggleWebSite(_)) {
+        obj.entry(key).or_insert_with(|| Value::Array(Vec::new()))
     } else {
         obj.get_mut(key).ok_or_else(|| anyhow::anyhow!("{key}: no such setting"))?
     };
@@ -271,6 +276,13 @@ fn with_change(text: &str, key: &str, change: Change) -> anyhow::Result<(String,
         }
         (Value::Array(items), Change::ListRemove(i)) if i < items.len() => {
             items.remove(i);
+        }
+        (Value::Array(items), Change::ToggleWebSite(id)) if key == "web_search_sites" => {
+            let before = items.len();
+            items.retain(|item| item.as_str() != Some(id.as_str()));
+            if items.len() == before {
+                items.push(Value::String(id));
+            }
         }
         _ => anyhow::bail!("{key}: unsupported change"),
     }
@@ -342,6 +354,19 @@ mod tests {
     fn change_toggles_bool() {
         let json = change(&template(), "semantic", Change::Toggle);
         assert_eq!(json["semantic"], true);
+    }
+
+    #[test]
+    fn web_sites_default_to_off_and_toggle_by_id() {
+        let original = r#"{"custom": 1}"#;
+        let defaults: Settings = serde_json::from_str(original).unwrap();
+        assert!(defaults.web_search_sites.is_empty());
+
+        let on = change(original, "web_search_sites", Change::ToggleWebSite("google".into()));
+        assert_eq!(on["web_search_sites"], serde_json::json!(["google"]));
+        let off = change(&on.to_string(), "web_search_sites", Change::ToggleWebSite("google".into()));
+        assert_eq!(off["web_search_sites"], serde_json::json!([]));
+        assert_eq!(off["custom"], 1);
     }
 
     #[test]

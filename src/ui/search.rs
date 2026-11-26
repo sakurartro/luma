@@ -192,6 +192,16 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
     let weak_query = main_window.as_weak();
     let currency = currency.clone();
     main_window.on_run_query(move |text| {
+        let Some(window) = weak_query.upgrade() else { return };
+        let revision = window.get_query_revision().wrapping_add(1);
+        let has_text = !text.trim().is_empty();
+        window.set_query_revision(revision);
+        window.set_query_result("".into());
+        window.set_has_search_text(has_text);
+        window.set_query_pending(has_text);
+        if !has_text {
+            return;
+        }
         let weak = weak_query.clone();
         let text = text.to_string();
         let currency = currency.get();
@@ -207,8 +217,9 @@ pub(super) fn wire(main_window: &MainWindow, ctx: &Ctx) {
             };
             let _ = weak.upgrade_in_event_loop(move |window| {
                 // A newer keystroke already started its own query — discard.
-                if window.get_input_text() == text.as_str() {
+                if window.get_query_revision() == revision && window.get_input_text() == text.as_str() {
                     window.set_query_result(msg.into());
+                    window.set_query_pending(false);
                 }
             });
         });

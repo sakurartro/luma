@@ -6,6 +6,7 @@ import { FilesView } from "views/files.slint";
 import { PowerView } from "views/power.slint";
 import { MixedView } from "views/mixed.slint";
 import { SettingsView } from "views/settings.slint";
+import { WebSearchMenu, WebSearchRow } from "views/web-search.slint";
 
 export { Theme, AgentRow, AppItem, FileItem, SettingField, ThemeOption }
 
@@ -35,10 +36,13 @@ export component MainWindow inherits Window {
     callback paste-image();
     callback filter_category(string);
     callback run_query(string);
+    callback open-web-search(site: string, query: string) -> bool;
     callback power-action(string);
     callback hide-window();
     // settings menu (mode 5), see ui/settings.rs
     in property <[SettingField]> settings;
+    in property <[SettingField]> web-sites;
+    in property <[SettingField]> enabled-web-sites;
     in property <[ThemeOption]> themes;
     in property <[SettingField]> custom-colors;
     in property <int> active-theme;
@@ -50,6 +54,7 @@ export component MainWindow inherits Window {
     callback show-settings();
     callback select-theme(string) -> bool;
     callback setting-toggle(string);
+    callback toggle-web-site(string);
     callback setting-text(string, string);
     callback setting-list-set(string, int, string);
     callback setting-list-add(string, string);
@@ -84,7 +89,8 @@ export component MainWindow inherits Window {
     property <length> tip-h;
     changed mode => {
         root.tip-sel = -1;
-        root.settings-page = SettingsPage.overview;
+        root.web-menu-open = false;
+        root.web-row-selected = false;
     }
     changed apps => { root.tip-sel = -1; }
     changed files => { root.tip-sel = -1; }
@@ -96,6 +102,7 @@ export component MainWindow inherits Window {
     property <int> hover-idx: -1;
     function hover-tip(hover: bool, idx: int, name: string, x: length, y: length, h: length) {
         if hover {
+            root.web-row-selected = false;
             root.hover-idx = idx;
             root.sel = idx;
             root.tip-sel = idx;
@@ -115,16 +122,69 @@ export component MainWindow inherits Window {
 
     // also clamps, since the models can shrink when async results arrive
     function move-sel(d: int) {
+        if root.web-row-visible && d != 0 {
+            if root.web-row-selected {
+                if d < 0 && root.sel-len > 0 {
+                    root.web-row-selected = false;
+                    root.sel = root.sel-len - 1;
+                }
+                return;
+            }
+            if root.sel-len == 0 || (d > 0 && root.sel >= root.sel-len - 1) {
+                root.web-row-selected = true;
+                root.sel = -1;
+                root.tip-sel = -1;
+                return;
+            }
+        }
         root.sel = max(0, min(root.sel-len - 1, root.sel + d));
     }
 
+    property <bool> web-menu-open: false;
+    property <bool> web-row-selected: false;
+    property <int> web-site-selection: 0;
+    property <bool> web-open-error: false;
+    property <bool> web-query: root.mode == 0 && root.input-text != "" && root.has-search-text && !root.has-paste-thumb;
+    property <bool> web-settings-hint: root.enabled-web-sites.length == 0 && !root.searching && !root.file-list-loading && !root.query-pending
+        && root.apps.length == 0 && root.files.length == 0 && root.query-result == "";
+    property <bool> web-row-visible: root.web-query && (root.enabled-web-sites.length > 0 || root.web-settings-hint);
+    changed web-row-visible => {
+        if !root.web-row-visible { root.web-row-selected = false; }
+    }
+
+    function activate-web-row() {
+        if !root.web-row-visible { return; }
+        root.tip-sel = -1;
+        if root.enabled-web-sites.length == 0 {
+            root.activate-mode(5);
+            root.settings-page = SettingsPage.web-search;
+        } else {
+            root.web-site-selection = 0;
+            root.web-menu-open = true;
+            root.web-open-error = false;
+            root.focus-input();
+        }
+    }
+
+    function choose-web-site(site: string) {
+        if root.web-menu-open && root.open-web-search(site, root.input-text) {
+            root.web-menu-open = false;
+            root.hide-window();
+        } else {
+            root.web-open-error = true;
+        }
+    }
+
     public function activate-mode(m: int) {
+        root.settings-page = SettingsPage.overview;
         // power mode starts with nothing selected: a stray Enter must not power off
         root.sel = m == 3 && root.mode != 3 ? -1 : 0;
         if root.mode == m {
             root.mode = 0;
             if root.input-text == "" {
                 root.show_home();
+            } else if !root.has-paste-thumb {
+                root.search_all(root.input-text);
             }
         } else {
             root.mode = m;
@@ -176,6 +236,9 @@ export component MainWindow inherits Window {
     public function reset-view() {
         root.mode = 0;
         root.sel = 0;
+        root.settings-page = SettingsPage.overview;
+        root.web-menu-open = false;
+        root.web-row-selected = false;
         root.selected-category = "";
         root.tip-sel = -1;
         // empty-query list of pinned and most used apps
@@ -183,6 +246,10 @@ export component MainWindow inherits Window {
     }
     in-out property <string> query-result;
     in-out property <string> input-text;
+    in property <bool> has-search-text: false;
+    in property <bool> query-pending: false;
+    in property <int> query-revision: 0;
+    in property <bool> file-list-loading: false;
     // small preview of the pasted image, shown over the marker text in the search box
     in-out property <image> paste-thumb;
     in-out property <bool> has-paste-thumb: false;
@@ -203,7 +270,9 @@ export component MainWindow inherits Window {
         KeyBinding {
             keys: @keys(Escape);
             activated => {
-                if root.mode == 5 && root.settings-page != SettingsPage.overview {
+                if root.web-menu-open {
+                    root.web-menu-open = false;
+                } else if root.mode == 5 && root.settings-page != SettingsPage.overview {
                     root.back-settings-page();
                 } else {
                     root.hide-window();
@@ -294,6 +363,23 @@ export component MainWindow inherits Window {
                                     root.activate-mode(5);
                                     return accept;
                                 }
+                                if root.web-menu-open {
+                                    if event.text == Key.UpArrow || event.text == Key.DownArrow {
+                                        root.web-site-selection = max(0, min(root.enabled-web-sites.length - 1,
+                                            root.web-site-selection + (event.text == Key.UpArrow ? -1 : 1)));
+                                        return accept;
+                                    }
+                                    if event.text == Key.Return {
+                                        if !event.repeat && root.web-site-selection < root.enabled-web-sites.length {
+                                            root.choose-web-site(root.enabled-web-sites[root.web-site-selection].key);
+                                        }
+                                        return accept;
+                                    }
+                                }
+                                if event.text == Key.Return && root.web-row-selected && root.web-row-visible {
+                                    if !event.repeat { root.activate-web-row(); }
+                                    return accept;
+                                }
                                 if event.modifiers.control && event.text == "v" {
                                     // async; text pasting below still happens for a text clipboard
                                     root.paste-image();
@@ -310,6 +396,8 @@ export component MainWindow inherits Window {
                                 return reject;
                             }
                             edited => {
+                                root.web-menu-open = false;
+                                root.web-row-selected = false;
                                 // any edit drops the preview together with its marker text
                                 if root.has-paste-thumb {
                                     root.has-paste-thumb = false;
@@ -424,7 +512,8 @@ if root.input-text == "": Text {
                 clip: true;
 
                 // nothing to show yet while the lookup runs: say so instead of a dead box
-                if root.mode == 0 && root.searching && root.input-text != "" && root.apps.length == 0 && root.files.length == 0 && root.query-result == "": Text {
+                if root.mode == 0 && !root.web-menu-open && (root.searching || root.file-list-loading)
+                    && root.input-text != "" && root.apps.length == 0 && root.files.length == 0 && root.query-result == "": Text {
                     width: parent.width;
                     height: parent.height;
                     text: "Searching...";
@@ -435,6 +524,7 @@ if root.input-text == "": Text {
                 }
 
                 VerticalLayout {
+                    visible: !root.web-menu-open;
                     spacing: 12px;
 
                     // calc/currency card: query on the left, answer on the right
@@ -534,6 +624,8 @@ if root.input-text == "": Text {
                     if root.mode == 5: SettingsView {
                         page <=> root.settings-page;
                         settings: root.settings;
+                        web-sites: root.web-sites;
+                        enabled-web-site-count: root.enabled-web-sites.length;
                         themes: root.themes;
                         active-theme: root.active-theme;
                         custom-colors: root.custom-colors;
@@ -545,6 +637,7 @@ if root.input-text == "": Text {
                         select-theme(id) => { return root.select-theme(id); }
                         agent-toggle(i) => { root.agent-toggle(i); }
                         setting-toggle(key) => { root.setting-toggle(key); }
+                        toggle-web-site(id) => { root.toggle-web-site(id); }
                         setting-text(key, text) => { root.setting-text(key, text); }
                         setting-list-set(key, i, text) => { root.setting-list-set(key, i, text); }
                         setting-list-add(key, text) => { root.setting-list-add(key, text); }
@@ -565,6 +658,18 @@ if root.input-text == "": Text {
                         hide-window => { root.hide-window(); }
                         hover-tip(hover, idx, name, x, y, h) => { root.hover-tip(hover, idx, name, x, y, h); }
                     }
+                    if root.web-row-visible: WebSearchRow {
+                        label: root.enabled-web-sites.length == 0 ? "Set up web search" : "Search the web…";
+                        selected: root.web-row-selected;
+                        clicked => { root.activate-web-row(); }
+                    }
+                }
+                if root.web-menu-open: WebSearchMenu {
+                    width: parent.width;
+                    height: parent.height;
+                    sites: root.enabled-web-sites;
+                    selected: root.web-site-selection;
+                    open-site(site) => { root.choose-web-site(site); }
                 }
             }
 
@@ -585,7 +690,9 @@ if root.input-text == "": Text {
                     padding-right: 44px;
 
                     Text {
-                        text: root.mode == 5 && root.settings-page == SettingsPage.themes
+                        text: root.web-menu-open
+                            ? (root.web-open-error ? "Could not start the browser" : "Arrow keys: select | Enter: open site | Esc: back")
+                            : root.mode == 5 && root.settings-page == SettingsPage.themes
                             ? "Arrow keys: select | Enter: apply | Esc: back"
                             : root.mode == 5 && root.settings-page == SettingsPage.custom
                                 ? "Tab: next field | Enter: save | Esc: back"
